@@ -55,7 +55,7 @@ TTS_METHOD=""
 PYTHON_TTS_SCRIPT=""
 
 usage() {
-    echo "Uso: $0 [archivo.srt] [video] [carpeta_audios_opcional] [--test[=N]] [--solo-audio] [--no-freeze]"
+    echo "Uso: $0 [archivo.srt] [video] [carpeta_audios_opcional] [--test[=N]] [--solo-audio] [--no-freeze] [--remove-breaks]"
     echo ""
     echo "Parámetros:"
     echo "  archivo.srt              - Archivo de subtítulos"
@@ -65,11 +65,13 @@ usage() {
     echo "  --test=N                 - Modo test: N subtítulos"
     echo "  --solo-audio             - Solo genera audio, sin video"
     echo "  --no-freeze              - Trunca audios largos en lugar de freeze"
+    echo "  --remove-breaks          - Elimina pausas >15min del video final"
     echo ""
     echo "Ejemplos:"
     echo "  $0 subtitulos.srt video.mp4"
     echo "  $0 subtitulos.srt video.mp4 --no-freeze"
     echo "  $0 subtitulos.srt video.mp4 --test=100 --no-freeze"
+    echo "  $0 subtitulos.srt video.mp4 --remove-breaks"
     exit 1
 }
 
@@ -168,6 +170,7 @@ TEST_MODE=false
 TEST_LIMIT=30
 SOLO_AUDIO=false
 NO_FREEZE=false
+REMOVE_BREAKS=false
 
 for arg in "$@"; do
     if [ "$arg" = "--test" ]; then
@@ -179,6 +182,8 @@ for arg in "$@"; do
         SOLO_AUDIO=true
     elif [ "$arg" = "--no-freeze" ]; then
         NO_FREEZE=true
+    elif [ "$arg" = "--remove-breaks" ]; then
+        REMOVE_BREAKS=true
     fi
 done
 
@@ -202,6 +207,10 @@ if [ $# -eq 0 ]; then
     if [ "$no_freeze_response" = "s" ]; then
         NO_FREEZE=true
     fi
+    read -p "¿Eliminar pausas >15min (remove-breaks)? (s/n): " remove_breaks_response
+    if [ "$remove_breaks_response" = "s" ]; then
+        REMOVE_BREAKS=true
+    fi
 elif [ $# -ge 2 ]; then
     SRT_FILE=$1
     VIDEO_NAME=$2
@@ -218,9 +227,11 @@ elif [ $# -ge 2 ]; then
             SOLO_AUDIO=true
         elif [ "$arg" = "--no-freeze" ]; then
             NO_FREEZE=true
+        elif [ "$arg" = "--remove-breaks" ]; then
+            REMOVE_BREAKS=true
         elif [[ "$arg" =~ ^[0-9]+$ ]] && [ "$TEST_MODE" = true ]; then
             TEST_LIMIT=$arg
-        elif [ "$TEST_MODE" = false ] && [ "$SOLO_AUDIO" = false ] && [ "$NO_FREEZE" = false ]; then
+        elif [ "$TEST_MODE" = false ] && [ "$SOLO_AUDIO" = false ] && [ "$NO_FREEZE" = false ] && [ "$REMOVE_BREAKS" = false ]; then
             AUDIO_DIR=$arg
         fi
     done
@@ -238,6 +249,10 @@ fi
 
 if [ "$NO_FREEZE" = true ]; then
     echo -e "${MAGENTA}🚫 MODO NO-FREEZE: Audios largos serán truncados${NC}"
+fi
+
+if [ "$REMOVE_BREAKS" = true ]; then
+    echo -e "${MAGENTA}✂️  MODO REMOVE-BREAKS: Se eliminarán pausas >15min del video final${NC}"
 fi
 
 # Detectar método TTS
@@ -945,6 +960,151 @@ else
     fi
 fi
 
+# Procesar video para eliminar pausas largas si está activado --remove-breaks
+if [ "$REMOVE_BREAKS" = true ] && [ "$SOLO_AUDIO" = false ]; then
+    echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
+    echo -e "${BLUE}✂️  PASO 7: ELIMINAR PAUSAS LARGAS DEL VIDEO${NC}"
+    echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
+
+    # Configuración
+    MIN_GAP_SECONDS=900  # 15 minutos
+    MARGIN_SECONDS=60    # 1 minuto de margen
+
+    echo -e "${YELLOW}Analizando gaps en los subtítulos...${NC}"
+
+    # Detectar gaps entre subtítulos
+    declare -a gap_starts_final
+    declare -a gap_ends_final
+
+    for idx in "${!subtitle_ids[@]}"; do
+        if [ $idx -lt $((${#subtitle_ids[@]} - 1)) ]; then
+            id="${subtitle_ids[$idx]}"
+            next_idx=$((idx + 1))
+            next_id="${subtitle_ids[$next_idx]}"
+
+            end_time="${subtitle_ends[$id]}"
+            next_start_time="${subtitle_starts[$next_id]}"
+
+            end_seconds=$(srt_time_to_seconds "$end_time")
+            next_start_seconds=$(srt_time_to_seconds "$next_start_time")
+
+            gap=$(echo "$next_start_seconds - $end_seconds" | bc -l)
+
+            if (( $(echo "$gap >= $MIN_GAP_SECONDS" | bc -l) )); then
+                echo -e "${YELLOW}  ✓ Gap detectado: ${gap}s ($(echo "$gap / 60" | bc -l | awk '{printf "%.1f", $0}') min) entre subtítulo $id y $next_id${NC}"
+
+                # Calcular puntos de corte con márgenes
+                cut_start=$(echo "$end_seconds + $MARGIN_SECONDS" | bc -l)
+                cut_end=$(echo "$next_start_seconds - $MARGIN_SECONDS" | bc -l)
+
+                cut_duration=$(echo "$cut_end - $cut_start" | bc -l)
+                if (( $(echo "$cut_duration > 0" | bc -l) )); then
+                    gap_starts_final+=("$cut_start")
+                    gap_ends_final+=("$cut_end")
+                    echo -e "${GREEN}    → Se eliminará: ${cut_duration}s ($(echo "$cut_duration / 60" | bc -l | awk '{printf "%.1f", $0}') min)${NC}"
+                fi
+            fi
+        fi
+    done
+
+    if [ ${#gap_starts_final[@]} -eq 0 ]; then
+        echo -e "${GREEN}✓ No se encontraron pausas largas (>15 min)${NC}"
+        echo -e "${CYAN}No es necesario generar video sin pausas${NC}"
+    else
+        echo -e "${CYAN}═══════════════════════════════════════════════════${NC}"
+        echo -e "${CYAN}Total de pausas a eliminar: ${#gap_starts_final[@]}${NC}"
+
+        # Calcular segmentos a mantener
+        declare -a keep_starts
+        declare -a keep_ends
+
+        current_pos=0
+        for idx in "${!gap_starts_final[@]}"; do
+            gap_start="${gap_starts_final[$idx]}"
+            gap_end="${gap_ends_final[$idx]}"
+
+            keep_starts+=("$current_pos")
+            keep_ends+=("$gap_start")
+
+            current_pos="$gap_end"
+        done
+
+        # Agregar segmento final
+        video_duration=$(get_duration "$OUTPUT_VIDEO")
+        keep_starts+=("$current_pos")
+        keep_ends+=("$video_duration")
+
+        echo -e "${YELLOW}Segmentos a mantener: ${#keep_starts[@]}${NC}"
+
+        # Crear segmentos del video final
+        BREAK_SEGMENTS_DIR="$TEMP_DIR/break_segments"
+        mkdir -p "$BREAK_SEGMENTS_DIR"
+
+        declare -a video_keep_segments
+
+        for idx in "${!keep_starts[@]}"; do
+            seg_start="${keep_starts[$idx]}"
+            seg_end="${keep_ends[$idx]}"
+            seg_dur=$(echo "$seg_end - $seg_start" | bc -l)
+
+            echo -e "${YELLOW}  Extrayendo segmento $((idx+1)): ${seg_start}s a ${seg_end}s (${seg_dur}s)${NC}"
+
+            if (( $(echo "$seg_dur > 0.1" | bc -l) )); then
+                seg_file="$BREAK_SEGMENTS_DIR/seg_${idx}.mkv"
+
+                if ffmpeg -i "$OUTPUT_VIDEO" -ss "$seg_start" -t "$seg_dur" \
+                    -c copy "$seg_file" -y 2>"$TEMP_DIR/logs/break_seg_${idx}.log"; then
+
+                    if [ -f "$seg_file" ] && [ -s "$seg_file" ]; then
+                        video_keep_segments+=("$seg_file")
+                        echo -e "${GREEN}    ✓ Segmento creado${NC}"
+                    else
+                        echo -e "${RED}    ✗ Error: segmento vacío${NC}"
+                    fi
+                else
+                    echo -e "${RED}    ✗ Error creando segmento${NC}"
+                fi
+            fi
+        done
+
+        # Concatenar segmentos
+        if [ ${#video_keep_segments[@]} -gt 0 ]; then
+            echo -e "${CYAN}═══════════════════════════════════════════════════${NC}"
+            echo -e "${CYAN}Concatenando ${#video_keep_segments[@]} segmentos...${NC}"
+
+            CONCAT_BREAKS_LIST="$TEMP_DIR/concat_breaks.txt"
+            > "$CONCAT_BREAKS_LIST"
+            for seg in "${video_keep_segments[@]}"; do
+                echo "file '$seg'" >> "$CONCAT_BREAKS_LIST"
+            done
+
+            OUTPUT_VIDEO_CLEAN="${VIDEO_NAME%.*}_clean_breaks.mkv"
+
+            if ffmpeg -f concat -safe 0 -i "$CONCAT_BREAKS_LIST" -c copy \
+                "$OUTPUT_VIDEO_CLEAN" -y 2>"$TEMP_DIR/logs/concat_clean_breaks.log"; then
+
+                if [ -f "$OUTPUT_VIDEO_CLEAN" ] && [ -s "$OUTPUT_VIDEO_CLEAN" ]; then
+                    # Calcular tiempo total eliminado
+                    total_removed=0
+                    for idx in "${!gap_starts_final[@]}"; do
+                        gap_dur=$(echo "${gap_ends_final[$idx]} - ${gap_starts_final[$idx]}" | bc -l)
+                        total_removed=$(echo "$total_removed + $gap_dur" | bc -l)
+                    done
+
+                    echo -e "${GREEN}✓ Video sin pausas creado: $OUTPUT_VIDEO_CLEAN${NC}"
+                    echo -e "${GREEN}✓ Tiempo total eliminado: ${total_removed}s ($(echo "$total_removed / 60" | bc -l | awk '{printf "%.1f", $0}') min)${NC}"
+                else
+                    echo -e "${RED}✗ Error: video vacío${NC}"
+                fi
+            else
+                echo -e "${RED}✗ Error concatenando segmentos${NC}"
+            fi
+        else
+            echo -e "${RED}✗ No se crearon segmentos válidos${NC}"
+        fi
+    fi
+fi
+
 echo -e "${GREEN}═══════════════════════════════════════════════════${NC}"
 echo -e "${CYAN}📄 ARCHIVOS GENERADOS${NC}"
 echo -e "${CYAN}═══════════════════════════════════════════════════${NC}"
@@ -954,6 +1114,9 @@ if [ "$SOLO_AUDIO" = true ]; then
     [ -f "$OUTPUT_AUDIO_AAC" ] && echo -e "${GREEN}✅ $OUTPUT_AUDIO_AAC${NC}"
 else
     echo -e "${GREEN}✅ $OUTPUT_VIDEO${NC}"
+    if [ "$REMOVE_BREAKS" = true ] && [ -n "$OUTPUT_VIDEO_CLEAN" ] && [ -f "$OUTPUT_VIDEO_CLEAN" ]; then
+        echo -e "${GREEN}✅ $OUTPUT_VIDEO_CLEAN ${CYAN}(sin pausas largas)${NC}"
+    fi
 fi
 echo -e "${GREEN}✅ $DEBUG_SRT${NC}"
 
