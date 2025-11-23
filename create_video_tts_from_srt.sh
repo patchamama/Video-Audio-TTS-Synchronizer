@@ -95,19 +95,36 @@ srt_time_to_seconds() {
 
 seconds_to_srt_time() {
     local total_seconds=$1
-    
+
     if [ -z "$total_seconds" ] || [ "$total_seconds" = "0" ]; then
         echo "00:00:00,000"
         return
     fi
-    
+
+    # Asegurar que el número esté en formato decimal limpio
+    total_seconds=$(printf "%.3f" "$total_seconds")
+
     awk -v ts="$total_seconds" 'BEGIN {
+        # Convertir a número para asegurar precisión
+        ts = ts + 0
+
+        # Calcular horas
         hours = int(ts / 3600)
         remainder = ts - (hours * 3600)
+
+        # Calcular minutos
         minutes = int(remainder / 60)
-        seconds = remainder - (minutes * 60)
-        seconds_int = int(seconds)
-        milliseconds = int((seconds - seconds_int) * 1000)
+        remainder = remainder - (minutes * 60)
+
+        # Calcular segundos y milisegundos
+        seconds_int = int(remainder)
+        milliseconds = int((remainder - seconds_int) * 1000 + 0.5)
+
+        # Manejar overflow de milisegundos
+        if (milliseconds >= 1000) {
+            milliseconds = 999
+        }
+
         printf "%02d:%02d:%02d,%03d\n", hours, minutes, seconds_int, milliseconds
     }'
 }
