@@ -288,25 +288,42 @@ echo -e "${GREEN}Video: $VIDEO_FILE${NC}"
 # Detectar si ya existe video procesado y solo se quiere eliminar breaks
 DIRECT_BREAK_MODE=false
 if [ "$REMOVE_BREAKS" = true ]; then
-    # Verificar si el video termina con _con_tts
-    if [[ "$VIDEO_FILE" =~ _con_tts\.(mkv|mp4)$ ]]; then
-        # Verificar si existe el SRT debug correspondiente
-        DEBUG_SRT_CHECK="${VIDEO_FILE%_con_tts.*}_debug.srt"
-        if [ -f "$DEBUG_SRT_CHECK" ]; then
-            echo -e "${CYAN}═══════════════════════════════════════════════════${NC}"
-            echo -e "${CYAN}🔍 MODO DIRECTO DETECTADO${NC}"
-            echo -e "${CYAN}═══════════════════════════════════════════════════${NC}"
-            echo -e "${YELLOW}Video ya procesado detectado: $VIDEO_FILE${NC}"
-            echo -e "${YELLOW}SRT debug detectado: $DEBUG_SRT_CHECK${NC}"
-            echo -e "${GREEN}→ Saltando al procesamiento de eliminación de pausas${NC}"
+    PROCESSED_VIDEO_FILE=""
+    DEBUG_SRT_CHECK=""
 
-            DIRECT_BREAK_MODE=true
-            SRT_FILE="$DEBUG_SRT_CHECK"
-            OUTPUT_VIDEO="$VIDEO_FILE"
-            TEMP_DIR="temp_breaks_$$"
-            mkdir -p "$TEMP_DIR"
-            mkdir -p "$TEMP_DIR/logs"
-        fi
+    # Caso 1: El video de entrada ya termina con _con_tts
+    if [[ "$VIDEO_FILE" =~ _con_tts\.(mkv|mp4)$ ]]; then
+        PROCESSED_VIDEO_FILE="$VIDEO_FILE"
+        DEBUG_SRT_CHECK="${VIDEO_FILE%_con_tts.*}_debug.srt"
+    else
+        # Caso 2: Buscar si existe video_con_tts.mkv o video_con_tts.mp4 correspondiente
+        BASE_NAME="${VIDEO_FILE%.*}"
+        for ext in .mkv .mp4; do
+            if [ -f "${BASE_NAME}_con_tts${ext}" ]; then
+                PROCESSED_VIDEO_FILE="${BASE_NAME}_con_tts${ext}"
+                DEBUG_SRT_CHECK="${BASE_NAME}_debug.srt"
+                break
+            fi
+        done
+    fi
+
+    # Si encontramos video procesado y SRT debug, activar modo directo
+    if [ -n "$PROCESSED_VIDEO_FILE" ] && [ -f "$DEBUG_SRT_CHECK" ]; then
+        echo -e "${CYAN}═══════════════════════════════════════════════════${NC}"
+        echo -e "${CYAN}🔍 MODO DIRECTO DETECTADO${NC}"
+        echo -e "${CYAN}═══════════════════════════════════════════════════${NC}"
+        echo -e "${YELLOW}Video ya procesado detectado: $PROCESSED_VIDEO_FILE${NC}"
+        echo -e "${YELLOW}SRT debug detectado: $DEBUG_SRT_CHECK${NC}"
+        echo -e "${GREEN}→ Saltando al procesamiento de eliminación de pausas${NC}"
+
+        DIRECT_BREAK_MODE=true
+        SRT_FILE="$DEBUG_SRT_CHECK"
+        OUTPUT_VIDEO="$PROCESSED_VIDEO_FILE"
+        VIDEO_FILE="$PROCESSED_VIDEO_FILE"
+        VIDEO_NAME="${PROCESSED_VIDEO_FILE%.*}"
+        TEMP_DIR="temp_breaks_$$"
+        mkdir -p "$TEMP_DIR"
+        mkdir -p "$TEMP_DIR/logs"
     fi
 fi
 
