@@ -55,7 +55,7 @@ TTS_METHOD=""
 PYTHON_TTS_SCRIPT=""
 
 usage() {
-    echo "Uso: $0 [archivo.srt] [video] [carpeta_audios_opcional] [--test[=N]] [--solo-audio] [--no-freeze] [--remove-breaks]"
+    echo "Uso: $0 [archivo.srt] [video] [carpeta_audios_opcional] [--test[=N]] [--solo-audio] [--no-freeze] [--remove-breaks] [--only-remove-breaks]"
     echo ""
     echo "Parámetros:"
     echo "  archivo.srt              - Archivo de subtítulos"
@@ -66,12 +66,14 @@ usage() {
     echo "  --solo-audio             - Solo genera audio, sin video"
     echo "  --no-freeze              - Trunca audios largos en lugar de freeze"
     echo "  --remove-breaks          - Elimina pausas >15min del video final"
+    echo "  --only-remove-breaks     - SOLO elimina pausas del video (sin TTS)"
     echo ""
     echo "Ejemplos:"
     echo "  $0 subtitulos.srt video.mp4"
     echo "  $0 subtitulos.srt video.mp4 --no-freeze"
     echo "  $0 subtitulos.srt video.mp4 --test=100 --no-freeze"
     echo "  $0 subtitulos.srt video.mp4 --remove-breaks"
+    echo "  $0 subtitulos.srt video.mp4 --only-remove-breaks"
     exit 1
 }
 
@@ -101,8 +103,8 @@ seconds_to_srt_time() {
         return
     fi
 
-    # Asegurar que el número esté en formato decimal limpio
-    total_seconds=$(printf "%.3f" "$total_seconds")
+    # Asegurar que el número esté en formato decimal limpio (forzar locale numérico)
+    total_seconds=$(LC_NUMERIC=C printf "%.3f" "$total_seconds")
 
     awk -v ts="$total_seconds" 'BEGIN {
         # Convertir a número para asegurar precisión
@@ -188,6 +190,7 @@ TEST_LIMIT=30
 SOLO_AUDIO=false
 NO_FREEZE=false
 REMOVE_BREAKS=false
+ONLY_REMOVE_BREAKS=false
 
 for arg in "$@"; do
     if [ "$arg" = "--test" ]; then
@@ -201,6 +204,8 @@ for arg in "$@"; do
         NO_FREEZE=true
     elif [ "$arg" = "--remove-breaks" ]; then
         REMOVE_BREAKS=true
+    elif [ "$arg" = "--only-remove-breaks" ]; then
+        ONLY_REMOVE_BREAKS=true
     fi
 done
 
@@ -228,6 +233,10 @@ if [ $# -eq 0 ]; then
     if [ "$remove_breaks_response" = "s" ]; then
         REMOVE_BREAKS=true
     fi
+    read -p "¿SOLO eliminar pausas sin TTS (only-remove-breaks)? (s/n): " only_remove_breaks_response
+    if [ "$only_remove_breaks_response" = "s" ]; then
+        ONLY_REMOVE_BREAKS=true
+    fi
 elif [ $# -ge 2 ]; then
     SRT_FILE=$1
     VIDEO_NAME=$2
@@ -246,9 +255,11 @@ elif [ $# -ge 2 ]; then
             NO_FREEZE=true
         elif [ "$arg" = "--remove-breaks" ]; then
             REMOVE_BREAKS=true
+        elif [ "$arg" = "--only-remove-breaks" ]; then
+            ONLY_REMOVE_BREAKS=true
         elif [[ "$arg" =~ ^[0-9]+$ ]] && [ "$TEST_MODE" = true ]; then
             TEST_LIMIT=$arg
-        elif [ "$TEST_MODE" = false ] && [ "$SOLO_AUDIO" = false ] && [ "$NO_FREEZE" = false ] && [ "$REMOVE_BREAKS" = false ]; then
+        elif [ "$TEST_MODE" = false ] && [ "$SOLO_AUDIO" = false ] && [ "$NO_FREEZE" = false ] && [ "$REMOVE_BREAKS" = false ] && [ "$ONLY_REMOVE_BREAKS" = false ]; then
             AUDIO_DIR=$arg
         fi
     done
@@ -270,6 +281,10 @@ fi
 
 if [ "$REMOVE_BREAKS" = true ]; then
     echo -e "${MAGENTA}✂️  MODO REMOVE-BREAKS: Se eliminarán pausas >15min del video final${NC}"
+fi
+
+if [ "$ONLY_REMOVE_BREAKS" = true ]; then
+    echo -e "${MAGENTA}✂️  MODO ONLY-REMOVE-BREAKS: SOLO se eliminarán pausas (sin TTS)${NC}"
 fi
 
 # Detectar método TTS
@@ -302,9 +317,24 @@ done
 echo -e "${GREEN}SRT: $SRT_FILE${NC}"
 echo -e "${GREEN}Video: $VIDEO_FILE${NC}"
 
-# Detectar si ya existe video procesado y solo se quiere eliminar breaks
+# Detectar si SOLO se quiere eliminar breaks (sin TTS)
 DIRECT_BREAK_MODE=false
-if [ "$REMOVE_BREAKS" = true ]; then
+if [ "$ONLY_REMOVE_BREAKS" = true ]; then
+    echo -e "${CYAN}═══════════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}🔍 MODO SOLO ELIMINACIÓN DE PAUSAS${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════${NC}"
+    echo -e "${YELLOW}Video de entrada: $VIDEO_FILE${NC}"
+    echo -e "${YELLOW}SRT de entrada: $SRT_FILE${NC}"
+    echo -e "${GREEN}→ Saltando directamente a eliminación de pausas${NC}"
+
+    DIRECT_BREAK_MODE=true
+    OUTPUT_VIDEO="$VIDEO_FILE"
+    VIDEO_NAME="${VIDEO_FILE%.*}"
+    TEMP_DIR="temp_breaks_$$"
+    mkdir -p "$TEMP_DIR"
+    mkdir -p "$TEMP_DIR/logs"
+# Detectar si ya existe video procesado y solo se quiere eliminar breaks
+elif [ "$REMOVE_BREAKS" = true ]; then
     PROCESSED_VIDEO_FILE=""
     DEBUG_SRT_CHECK=""
 
@@ -1032,8 +1062,8 @@ fi
 
 fi  # Fin del if DIRECT_BREAK_MODE = false
 
-# Procesar video para eliminar pausas largas si está activado --remove-breaks
-if [ "$REMOVE_BREAKS" = true ] && [ "$SOLO_AUDIO" = false ]; then
+# Procesar video para eliminar pausas largas si está activado --remove-breaks o --only-remove-breaks
+if [ \( "$REMOVE_BREAKS" = true -o "$ONLY_REMOVE_BREAKS" = true \) ] && [ "$SOLO_AUDIO" = false ]; then
     echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
     echo -e "${BLUE}✂️  PASO 7: ELIMINAR PAUSAS LARGAS DEL VIDEO${NC}"
     echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
@@ -1181,9 +1211,13 @@ echo -e "${GREEN}═════════════════════
 echo -e "${CYAN}📄 ARCHIVOS GENERADOS${NC}"
 echo -e "${CYAN}═══════════════════════════════════════════════════${NC}"
 
-if [ "$DIRECT_BREAK_MODE" = true ]; then
-    # En modo directo solo mostramos los videos
-    echo -e "${GREEN}✅ $OUTPUT_VIDEO ${CYAN}(video original)${NC}"
+if [ "$DIRECT_BREAK_MODE" = true ] || [ "$ONLY_REMOVE_BREAKS" = true ]; then
+    # En modo directo o only-remove-breaks solo mostramos los videos
+    if [ "$ONLY_REMOVE_BREAKS" = true ]; then
+        echo -e "${GREEN}✅ $OUTPUT_VIDEO ${CYAN}(video original)${NC}"
+    else
+        echo -e "${GREEN}✅ $OUTPUT_VIDEO ${CYAN}(video original)${NC}"
+    fi
     if [ -n "$OUTPUT_VIDEO_CLEAN" ] && [ -f "$OUTPUT_VIDEO_CLEAN" ]; then
         echo -e "${GREEN}✅ $OUTPUT_VIDEO_CLEAN ${CYAN}(sin pausas largas)${NC}"
     fi
@@ -1201,7 +1235,7 @@ else
     echo -e "${GREEN}✅ $DEBUG_SRT${NC}"
 fi
 
-if [ "$TEST_MODE" = true ] || [ "$DIRECT_BREAK_MODE" = true ]; then
+if [ "$TEST_MODE" = true ] || [ "$DIRECT_BREAK_MODE" = true ] || [ "$ONLY_REMOVE_BREAKS" = true ]; then
     echo -e "${YELLOW}⚠️  Conservando: $TEMP_DIR${NC}"
 elif [ "$SKIP_TTS" = false ]; then
     echo -e "${YELLOW}Limpiando temporales...${NC}"
