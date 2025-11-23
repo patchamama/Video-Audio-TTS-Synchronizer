@@ -714,12 +714,32 @@ time_offset=0
 
 for idx in "${!subtitle_ids[@]}"; do
     id="${subtitle_ids[$idx]}"
-    
+
     start_time="${subtitle_starts[$id]}"
     end_time="${subtitle_ends[$id]}"
+
+    # Validar que los tiempos no estén vacíos
+    if [ -z "$start_time" ] || [ -z "$end_time" ]; then
+        echo -e "${RED}Error: Subtítulo $id tiene tiempos vacíos${NC}"
+        echo -e "${YELLOW}  Start: '$start_time', End: '$end_time'${NC}"
+        continue
+    fi
+
     start_seconds=$(srt_time_to_seconds "$start_time")
     end_seconds=$(srt_time_to_seconds "$end_time")
-    
+
+    # Validar que la conversión fue exitosa
+    if [ -z "$start_seconds" ] || [ -z "$end_seconds" ]; then
+        echo -e "${RED}Error: Conversión falló para subtítulo $id${NC}"
+        echo -e "${YELLOW}  Start: '$start_time' → '$start_seconds', End: '$end_time' → '$end_seconds'${NC}"
+        continue
+    fi
+
+    # Asegurar valores numéricos válidos con valores por defecto si están vacíos
+    start_seconds=${start_seconds:-0}
+    end_seconds=${end_seconds:-0}
+    time_offset=${time_offset:-0}
+
     new_start_seconds=$(echo "$start_seconds + $time_offset" | bc -l)
     new_end_seconds=$(echo "$end_seconds + $time_offset" | bc -l)
     
