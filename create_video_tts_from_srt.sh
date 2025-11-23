@@ -285,24 +285,57 @@ done
 echo -e "${GREEN}SRT: $SRT_FILE${NC}"
 echo -e "${GREEN}Video: $VIDEO_FILE${NC}"
 
-# Configurar carpeta temporal
-TEMP_DIR=""
-SKIP_TTS=false
+# Detectar si ya existe video procesado y solo se quiere eliminar breaks
+DIRECT_BREAK_MODE=false
+if [ "$REMOVE_BREAKS" = true ]; then
+    # Verificar si el video termina con _con_tts
+    if [[ "$VIDEO_FILE" =~ _con_tts\.(mkv|mp4)$ ]]; then
+        # Verificar si existe el SRT debug correspondiente
+        DEBUG_SRT_CHECK="${VIDEO_FILE%_con_tts.*}_debug.srt"
+        if [ -f "$DEBUG_SRT_CHECK" ]; then
+            echo -e "${CYAN}═══════════════════════════════════════════════════${NC}"
+            echo -e "${CYAN}🔍 MODO DIRECTO DETECTADO${NC}"
+            echo -e "${CYAN}═══════════════════════════════════════════════════${NC}"
+            echo -e "${YELLOW}Video ya procesado detectado: $VIDEO_FILE${NC}"
+            echo -e "${YELLOW}SRT debug detectado: $DEBUG_SRT_CHECK${NC}"
+            echo -e "${GREEN}→ Saltando al procesamiento de eliminación de pausas${NC}"
 
-if [ -n "$AUDIO_DIR" ] && [ -d "$AUDIO_DIR" ]; then
-    TEMP_DIR="$AUDIO_DIR"
-    SKIP_TTS=true
-    echo -e "${GREEN}Usando audios: $TEMP_DIR${NC}"
-else
-    TEMP_DIR="temp_audio_$$"
-    mkdir -p "$TEMP_DIR"
-    mkdir -p "$TEMP_DIR/logs"
-    echo -e "${GREEN}Carpeta temporal: $TEMP_DIR${NC}"
+            DIRECT_BREAK_MODE=true
+            SRT_FILE="$DEBUG_SRT_CHECK"
+            OUTPUT_VIDEO="$VIDEO_FILE"
+            TEMP_DIR="temp_breaks_$$"
+            mkdir -p "$TEMP_DIR"
+            mkdir -p "$TEMP_DIR/logs"
+        fi
+    fi
 fi
 
-echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
-echo -e "${BLUE}📋 PASO 1: PARSEAR SUBTÍTULOS${NC}"
-echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
+# Configurar carpeta temporal
+if [ "$DIRECT_BREAK_MODE" = false ]; then
+    TEMP_DIR=""
+    SKIP_TTS=false
+
+    if [ -n "$AUDIO_DIR" ] && [ -d "$AUDIO_DIR" ]; then
+        TEMP_DIR="$AUDIO_DIR"
+        SKIP_TTS=true
+        echo -e "${GREEN}Usando audios: $TEMP_DIR${NC}"
+    else
+        TEMP_DIR="temp_audio_$$"
+        mkdir -p "$TEMP_DIR"
+        mkdir -p "$TEMP_DIR/logs"
+        echo -e "${GREEN}Carpeta temporal: $TEMP_DIR${NC}"
+    fi
+fi
+
+if [ "$DIRECT_BREAK_MODE" = false ]; then
+    echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
+    echo -e "${BLUE}📋 PASO 1: PARSEAR SUBTÍTULOS${NC}"
+    echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
+else
+    echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
+    echo -e "${BLUE}📋 PARSEAR SUBTÍTULOS DEBUG${NC}"
+    echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
+fi
 
 # Parsear SRT
 current_id=""
@@ -354,6 +387,9 @@ if [ "$TEST_MODE" = true ] && [ ${#subtitle_ids[@]} -gt $TEST_LIMIT ]; then
 fi
 
 echo -e "${GREEN}A procesar: ${#subtitle_ids[@]}${NC}"
+
+# Si estamos en modo directo, saltar al procesamiento de breaks
+if [ "$DIRECT_BREAK_MODE" = false ]; then
 
 echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
 echo -e "${BLUE}🎤 PASO 2: GENERAR AUDIOS CON AJUSTE INTELIGENTE${NC}"
@@ -960,6 +996,8 @@ else
     fi
 fi
 
+fi  # Fin del if DIRECT_BREAK_MODE = false
+
 # Procesar video para eliminar pausas largas si está activado --remove-breaks
 if [ "$REMOVE_BREAKS" = true ] && [ "$SOLO_AUDIO" = false ]; then
     echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
@@ -1109,18 +1147,27 @@ echo -e "${GREEN}═════════════════════
 echo -e "${CYAN}📄 ARCHIVOS GENERADOS${NC}"
 echo -e "${CYAN}═══════════════════════════════════════════════════${NC}"
 
-if [ "$SOLO_AUDIO" = true ]; then
-    echo -e "${GREEN}✅ $OUTPUT_AUDIO${NC}"
-    [ -f "$OUTPUT_AUDIO_AAC" ] && echo -e "${GREEN}✅ $OUTPUT_AUDIO_AAC${NC}"
-else
-    echo -e "${GREEN}✅ $OUTPUT_VIDEO${NC}"
-    if [ "$REMOVE_BREAKS" = true ] && [ -n "$OUTPUT_VIDEO_CLEAN" ] && [ -f "$OUTPUT_VIDEO_CLEAN" ]; then
+if [ "$DIRECT_BREAK_MODE" = true ]; then
+    # En modo directo solo mostramos los videos
+    echo -e "${GREEN}✅ $OUTPUT_VIDEO ${CYAN}(video original)${NC}"
+    if [ -n "$OUTPUT_VIDEO_CLEAN" ] && [ -f "$OUTPUT_VIDEO_CLEAN" ]; then
         echo -e "${GREEN}✅ $OUTPUT_VIDEO_CLEAN ${CYAN}(sin pausas largas)${NC}"
     fi
+else
+    # Modo normal
+    if [ "$SOLO_AUDIO" = true ]; then
+        echo -e "${GREEN}✅ $OUTPUT_AUDIO${NC}"
+        [ -f "$OUTPUT_AUDIO_AAC" ] && echo -e "${GREEN}✅ $OUTPUT_AUDIO_AAC${NC}"
+    else
+        echo -e "${GREEN}✅ $OUTPUT_VIDEO${NC}"
+        if [ "$REMOVE_BREAKS" = true ] && [ -n "$OUTPUT_VIDEO_CLEAN" ] && [ -f "$OUTPUT_VIDEO_CLEAN" ]; then
+            echo -e "${GREEN}✅ $OUTPUT_VIDEO_CLEAN ${CYAN}(sin pausas largas)${NC}"
+        fi
+    fi
+    echo -e "${GREEN}✅ $DEBUG_SRT${NC}"
 fi
-echo -e "${GREEN}✅ $DEBUG_SRT${NC}"
 
-if [ "$TEST_MODE" = true ]; then
+if [ "$TEST_MODE" = true ] || [ "$DIRECT_BREAK_MODE" = true ]; then
     echo -e "${YELLOW}⚠️  Conservando: $TEMP_DIR${NC}"
 elif [ "$SKIP_TTS" = false ]; then
     echo -e "${YELLOW}Limpiando temporales...${NC}"
