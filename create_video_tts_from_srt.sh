@@ -95,6 +95,21 @@ srt_time_to_seconds() {
     echo "scale=3; $hours * 3600 + $minutes * 60 + $seconds + $milliseconds / 1000" | bc
 }
 
+# Normalizar número decimal para evitar formato .xxx (agregar 0 inicial)
+normalize_decimal() {
+    local num=$1
+    if [ -z "$num" ]; then
+        echo "0"
+        return
+    fi
+    # Si empieza con punto, agregar 0
+    if [[ "$num" =~ ^\. ]]; then
+        echo "0$num"
+    else
+        echo "$num"
+    fi
+}
+
 seconds_to_srt_time() {
     local total_seconds=$1
 
@@ -104,7 +119,7 @@ seconds_to_srt_time() {
     fi
 
     # Asegurar que el número esté en formato decimal limpio (forzar locale numérico)
-    total_seconds=$(LC_NUMERIC=C printf "%.3f" "$total_seconds")
+    total_seconds=$(LC_NUMERIC=C printf "%.3f" "$total_seconds" 2>/dev/null || echo "0")
 
     awk -v ts="$total_seconds" 'BEGIN {
         # Convertir a número para asegurar precisión
@@ -491,7 +506,8 @@ if [ "$SKIP_TTS" = false ]; then
         start_seconds=$(srt_time_to_seconds "$start_time")
         end_seconds=$(srt_time_to_seconds "$end_time")
         subtitle_duration=$(echo "$end_seconds - $start_seconds" | bc -l)
-        
+        subtitle_duration=$(normalize_decimal "$subtitle_duration")
+
         # Calcular tiempo disponible
         next_idx=$((idx + 1))
         if [ $next_idx -lt ${#subtitle_ids[@]} ]; then
@@ -499,6 +515,7 @@ if [ "$SKIP_TTS" = false ]; then
             next_start_time="${subtitle_starts[$next_id]}"
             next_start_seconds=$(srt_time_to_seconds "$next_start_time")
             available_time=$(echo "$next_start_seconds - $start_seconds" | bc -l)
+            available_time=$(normalize_decimal "$available_time")
         else
             available_time=$subtitle_duration
         fi
