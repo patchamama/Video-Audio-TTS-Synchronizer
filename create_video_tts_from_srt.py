@@ -141,7 +141,8 @@ class SRTParser:
         minutes = int(remainder // 60)
         remainder = remainder % 60
         secs = int(remainder)
-        milliseconds = int((remainder - secs) * 1000)
+        # Redondear milisegundos para evitar errores de precisión
+        milliseconds = round((remainder - secs) * 1000)
 
         # Evitar overflow de milisegundos
         if milliseconds >= 1000:
