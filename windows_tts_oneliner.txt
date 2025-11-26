@@ -1,0 +1,60 @@
+# ============================================================================
+# ONE-LINERS DE POWERSHELL PARA TTS NATIVO DE WINDOWS
+# ============================================================================
+
+# 1️⃣  REPRODUCIR TEXTO (sin guardar archivo)
+# Copia y pega en PowerShell:
+
+Add-Type -AssemblyName System.Speech; $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer; $synth.Speak("Hola, esta es una prueba de síntesis de voz en español")
+
+# ============================================================================
+
+# 2️⃣  GENERAR ARCHIVO WAV (guardar audio)
+# Copia y pega en PowerShell:
+
+Add-Type -AssemblyName System.Speech; $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer; $synth.SetOutputToWaveFile("prueba.wav"); $synth.Speak("Este texto se guardará como archivo de audio"); Write-Host "Audio generado: prueba.wav"
+
+# ============================================================================
+
+# 3️⃣  GENERAR AUDIO CON VELOCIDAD AJUSTADA (rate 2 = más rápido)
+# Copia y pega en PowerShell:
+
+Add-Type -AssemblyName System.Speech; $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer; $synth.Rate = 2; $synth.SetOutputToWaveFile("prueba_rapida.wav"); $synth.Speak("Este audio es más rápido de lo normal"); Write-Host "Audio rápido generado: prueba_rapida.wav"
+
+# ============================================================================
+
+# 4️⃣  VER VOCES DISPONIBLES EN TU SISTEMA
+# Copia y pega en PowerShell:
+
+Add-Type -AssemblyName System.Speech; $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer; $synth.GetInstalledVoices() | ForEach-Object { Write-Host "$($_.VoiceInfo.Name) - $($_.VoiceInfo.Culture.Name) - $($_.VoiceInfo.Gender)" }
+
+# ============================================================================
+
+# 5️⃣  GENERAR AUDIO EN ESPAÑOL (si tienes voz española instalada)
+# Copia y pega en PowerShell:
+
+Add-Type -AssemblyName System.Speech; $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer; $voice = $synth.GetInstalledVoices() | Where-Object { $_.VoiceInfo.Culture.Name -like "es*" } | Select-Object -First 1; if ($voice) { $synth.SelectVoice($voice.VoiceInfo.Name); $synth.SetOutputToWaveFile("audio_espanol.wav"); $synth.Speak("Hola, esto es una prueba en español"); Write-Host "Audio en español generado" } else { Write-Host "No hay voz en español instalada" }
+
+# ============================================================================
+
+# 📝 NOTAS:
+# - Rate: valores entre -10 (muy lento) y 10 (muy rápido), 0 = normal
+# - Para español, puede que necesites instalar voces adicionales desde:
+#   Configuración > Hora e idioma > Voz > Agregar voces
+# - Los archivos WAV se guardan en el directorio actual de PowerShell
+
+# ============================================================================
+# ALTERNATIVA: EDGE-TTS (Requiere Python e Internet)
+# ============================================================================
+# Mejor calidad de voz usando el motor de Microsoft Edge (online)
+
+# Instalar:
+# pip install edge-tts
+
+# Usar:
+# edge-tts --text "Hola mundo" --write-media prueba.mp3 --voice es-ES-ElviraNeural
+
+# Listar voces en español:
+# edge-tts --list-voices | Select-String "es-"
+
+# ============================================================================
