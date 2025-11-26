@@ -920,10 +920,9 @@ def main():
 
         try:
             result = subprocess.run(
-                ["ffmpeg", "-fflags", "+genpts", "-i", str(video_to_use), "-i", str(audio_final),
+                ["ffmpeg", "-i", str(video_to_use), "-i", str(audio_final),
                  "-map", "0:v:0", "-map", "1:a:0",
-                 "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-                 "-avoid_negative_ts", "make_zero",
+                 "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-b:a", "192k",
                  "-shortest", str(output_video), "-y"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
