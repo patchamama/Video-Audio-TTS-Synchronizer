@@ -474,6 +474,59 @@ def truncate_audio(input_file: Path, output_file: Path, duration: float, error_l
             error_logger.add_error("Truncar audio", ' '.join(e.cmd), e.stderr or "Error truncando audio")
         return False
 
+def get_config_file() -> Path:
+    """Obtiene la ruta al archivo de configuración"""
+    home = Path.home()
+    return home / ".video_tts_config.json"
+
+def load_last_config() -> dict:
+    """Carga la última configuración usada"""
+    config_file = get_config_file()
+    if config_file.exists():
+        try:
+            import json
+            with open(config_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+def save_config(srt_file: str, video: str, test: Optional[int], solo_audio: bool,
+                no_freeze: bool, remove_breaks: bool):
+    """Guarda la configuración actual para futuras ejecuciones"""
+    config_file = get_config_file()
+    try:
+        import json
+        config = {
+            'srt_file': srt_file,
+            'video': video,
+            'test': test,
+            'solo_audio': solo_audio,
+            'no_freeze': no_freeze,
+            'remove_breaks': remove_breaks
+        }
+        with open(config_file, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2)
+    except Exception:
+        pass  # No es crítico si falla guardar
+
+def suggest_video_from_srt(srt_file: str) -> Optional[str]:
+    """Sugiere un archivo de video basado en el nombre del SRT"""
+    if not srt_file:
+        return None
+
+    srt_path = Path(srt_file)
+    base_name = srt_path.stem
+
+    # Buscar video con el mismo nombre base
+    for ext in ['.mp4', '.mkv', '.avi', '.mov', '.webm']:
+        video_path = srt_path.parent / f"{base_name}{ext}"
+        if video_path.exists():
+            return str(video_path)
+
+    # Si no existe, sugerir el nombre con .mp4
+    return str(srt_path.parent / f"{base_name}.mp4")
+
 def show_usage_and_prompt():
     """Muestra ejemplos de uso y ofrece modo interactivo"""
     print(f"{Colors.CYAN}{'═' * 60}{Colors.NC}")
@@ -515,48 +568,132 @@ def interactive_prompt():
     print(f"{Colors.BLUE}MODO INTERACTIVO{Colors.NC}")
     print(f"{Colors.BLUE}{'═' * 60}{Colors.NC}\n")
 
+    # Cargar última configuración
+    last_config = load_last_config()
+    if last_config:
+        print(f"{Colors.CYAN}💾 Última configuración cargada{Colors.NC}\n")
+
     try:
         # Archivo SRT
         print(f"{Colors.YELLOW}1. Archivo de subtítulos (SRT){Colors.NC}")
         print(f"   {Colors.CYAN}Ruta al archivo .srt con los subtítulos del video{Colors.NC}")
-        srt_file = input(f"   → Archivo SRT: ").strip()
-        if not srt_file:
-            print(f"{Colors.RED}Error: Debe especificar un archivo SRT{Colors.NC}")
-            sys.exit(1)
 
-        # Archivo de video
+        default_srt = last_config.get('srt_file', '')
+        if default_srt:
+            prompt = f"   → Archivo SRT [{Colors.GREEN}{default_srt}{Colors.NC}]: "
+        else:
+            prompt = f"   → Archivo SRT: "
+
+        srt_file = input(prompt).strip()
+        if not srt_file:
+            if default_srt:
+                srt_file = default_srt
+                print(f"   {Colors.CYAN}Usando: {srt_file}{Colors.NC}")
+            else:
+                print(f"{Colors.RED}Error: Debe especificar un archivo SRT{Colors.NC}")
+                sys.exit(1)
+
+        # Archivo de video (sugerir basado en SRT)
         print(f"\n{Colors.YELLOW}2. Archivo de video{Colors.NC}")
         print(f"   {Colors.CYAN}Ruta al archivo de video (.mp4, .mkv, etc.){Colors.NC}")
-        video = input(f"   → Archivo video: ").strip()
+
+        # Si el SRT cambió, sugerir video con el mismo nombre
+        suggested_video = suggest_video_from_srt(srt_file)
+        default_video = suggested_video if suggested_video else last_config.get('video', '')
+
+        if default_video:
+            exists_marker = "✓" if Path(default_video).exists() else "?"
+            prompt = f"   → Archivo video [{Colors.GREEN}{exists_marker} {default_video}{Colors.NC}]: "
+        else:
+            prompt = f"   → Archivo video: "
+
+        video = input(prompt).strip()
         if not video:
-            print(f"{Colors.RED}Error: Debe especificar un archivo de video{Colors.NC}")
-            sys.exit(1)
+            if default_video:
+                video = default_video
+                print(f"   {Colors.CYAN}Usando: {video}{Colors.NC}")
+            else:
+                print(f"{Colors.RED}Error: Debe especificar un archivo de video{Colors.NC}")
+                sys.exit(1)
 
         # Modo test
         print(f"\n{Colors.YELLOW}3. Modo test (opcional){Colors.NC}")
         print(f"   {Colors.CYAN}Procesar solo N subtítulos para pruebas rápidas{Colors.NC}")
-        test_input = input(f"   → ¿Activar modo test? (s/N): ").strip().lower()
+
+        default_test = last_config.get('test')
+        if default_test:
+            test_prompt = f"   → ¿Activar modo test? [{Colors.GREEN}s, {default_test} subtítulos{Colors.NC}/N]: "
+        else:
+            test_prompt = f"   → ¿Activar modo test? (s/N): "
+
+        test_input = input(test_prompt).strip().lower()
         test_value = None
+
         if test_input in ['s', 'si', 'sí', 'y', 'yes']:
-            test_num = input(f"   → ¿Cuántos subtítulos? (default: 30): ").strip()
-            test_value = int(test_num) if test_num else 30
+            if default_test:
+                num_prompt = f"   → ¿Cuántos subtítulos? [{Colors.GREEN}{default_test}{Colors.NC}]: "
+            else:
+                num_prompt = f"   → ¿Cuántos subtítulos? (default: 30): "
+            test_num = input(num_prompt).strip()
+
+            if not test_num and default_test:
+                test_value = default_test
+            else:
+                test_value = int(test_num) if test_num else 30
+        elif not test_input and default_test:
+            # Si presiona Enter y había un default, usarlo
+            test_value = default_test
+            print(f"   {Colors.CYAN}Usando: modo test con {test_value} subtítulos{Colors.NC}")
 
         # Solo audio
         print(f"\n{Colors.YELLOW}4. Solo audio (opcional){Colors.NC}")
         print(f"   {Colors.CYAN}Generar únicamente el audio TTS, sin procesar video{Colors.NC}")
-        solo_audio = input(f"   → ¿Solo generar audio? (s/N): ").strip().lower() in ['s', 'si', 'sí', 'y', 'yes']
+
+        default_solo = last_config.get('solo_audio', False)
+        if default_solo:
+            solo_prompt = f"   → ¿Solo generar audio? [{Colors.GREEN}S{Colors.NC}/n]: "
+        else:
+            solo_prompt = f"   → ¿Solo generar audio? (s/N): "
+
+        solo_input = input(solo_prompt).strip().lower()
+        if solo_input:
+            solo_audio = solo_input in ['s', 'si', 'sí', 'y', 'yes']
+        else:
+            solo_audio = default_solo
 
         # No freeze
         print(f"\n{Colors.YELLOW}5. Manejo de audios largos{Colors.NC}")
         print(f"   {Colors.CYAN}Cuando el audio TTS es más largo que el subtítulo:{Colors.NC}")
         print(f"   {Colors.GREEN}  - Freeze (default): Congela el último frame del video{Colors.NC}")
         print(f"   {Colors.YELLOW}  - Truncar: Corta el audio al tiempo disponible{Colors.NC}")
-        no_freeze = input(f"   → ¿Truncar audios largos? (s/N): ").strip().lower() in ['s', 'si', 'sí', 'y', 'yes']
+
+        default_nofreeze = last_config.get('no_freeze', False)
+        if default_nofreeze:
+            freeze_prompt = f"   → ¿Truncar audios largos? [{Colors.GREEN}S{Colors.NC}/n]: "
+        else:
+            freeze_prompt = f"   → ¿Truncar audios largos? (s/N): "
+
+        freeze_input = input(freeze_prompt).strip().lower()
+        if freeze_input:
+            no_freeze = freeze_input in ['s', 'si', 'sí', 'y', 'yes']
+        else:
+            no_freeze = default_nofreeze
 
         # Eliminar pausas
         print(f"\n{Colors.YELLOW}6. Eliminar pausas largas (opcional){Colors.NC}")
         print(f"   {Colors.CYAN}Remover pausas mayores a 15 minutos del video final{Colors.NC}")
-        remove_breaks = input(f"   → ¿Eliminar pausas largas? (s/N): ").strip().lower() in ['s', 'si', 'sí', 'y', 'yes']
+
+        default_breaks = last_config.get('remove_breaks', False)
+        if default_breaks:
+            breaks_prompt = f"   → ¿Eliminar pausas largas? [{Colors.GREEN}S{Colors.NC}/n]: "
+        else:
+            breaks_prompt = f"   → ¿Eliminar pausas largas? (s/N): "
+
+        breaks_input = input(breaks_prompt).strip().lower()
+        if breaks_input:
+            remove_breaks = breaks_input in ['s', 'si', 'sí', 'y', 'yes']
+        else:
+            remove_breaks = default_breaks
 
         # Construir lista de argumentos
         args_list = [srt_file, video]
@@ -588,6 +725,9 @@ def interactive_prompt():
         if confirm in ['n', 'no']:
             print(f"{Colors.YELLOW}Operación cancelada{Colors.NC}")
             sys.exit(0)
+
+        # Guardar configuración para futuras ejecuciones
+        save_config(srt_file, video, test_value, solo_audio, no_freeze, remove_breaks)
 
         return args_list
 
@@ -676,6 +816,16 @@ def main():
         print(f"{Colors.MAGENTA}✂️  MODO REMOVE-BREAKS: Se eliminarán pausas >15min{Colors.NC}")
     if args.only_remove_breaks:
         print(f"{Colors.MAGENTA}✂️  MODO ONLY-REMOVE-BREAKS: SOLO se eliminarán pausas{Colors.NC}")
+
+    # Guardar configuración para futuras ejecuciones
+    save_config(
+        str(srt_path),
+        str(video_path),
+        args.test,
+        args.solo_audio,
+        args.no_freeze,
+        args.remove_breaks
+    )
 
     # Parsear SRT
     print(f"{Colors.BLUE}{'═' * 50}{Colors.NC}")
