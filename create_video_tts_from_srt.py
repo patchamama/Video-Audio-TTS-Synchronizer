@@ -1,7 +1,79 @@
 #!/usr/bin/env python3
 """
-Script para generar audio TTS con ajuste automático de velocidad
-Compatible con macOS (say) y Linux/otros (gTTS via Python)
+Video-Audio-TTS Synchronizer
+============================
+
+Script para generar audio TTS (Text-to-Speech) con ajuste automático de velocidad
+y sincronización con video a partir de archivos de subtítulos SRT.
+
+Compatible con:
+- macOS: Usa el comando 'say' nativo
+- Linux/Otros: Usa gTTS (Google Text-to-Speech) vía Python
+
+PARÁMETROS DE USO
+=================
+
+Posicionales:
+  srt_file              Archivo de subtítulos en formato SRT
+  video                 Archivo de video (mkv, mp4, etc.)
+  audio_dir             [Opcional] Carpeta con audios previamente generados
+
+Opcionales:
+  --test N              Modo test: procesar solo N subtítulos (default: 30 si no se especifica N)
+  --solo-audio          Solo generar el audio master, sin procesar video
+  --no-freeze           Truncar audios largos en lugar de congelar video
+  --remove-breaks       Eliminar pausas mayores a 15 minutos del video final
+  --only-remove-breaks  SOLO eliminar pausas del video (sin generar TTS)
+
+EJEMPLOS DE USO
+===============
+
+# Procesar video completo con subtítulos
+python3 create_video_tts_from_srt.py video.srt video.mp4
+
+# Modo test con 50 subtítulos
+python3 create_video_tts_from_srt.py video.srt video.mp4 --test 50
+
+# Solo generar audio sin procesar video
+python3 create_video_tts_from_srt.py video.srt video.mp4 --solo-audio
+
+# Eliminar pausas largas del video final
+python3 create_video_tts_from_srt.py video.srt video.mp4 --remove-breaks
+
+# Usar audios previamente generados
+python3 create_video_tts_from_srt.py video.srt video.mp4 ./audio_folder/
+
+REQUISITOS
+==========
+
+macOS:
+  - ffmpeg
+  - Comando 'say' (incluido en macOS)
+
+Linux/Otros:
+  - ffmpeg
+  - Python 3.x
+  - pip3 install gtts pydub
+
+ARCHIVOS GENERADOS
+==================
+
+- {video}_working.srt     : Subtítulos con IDs renumerados consecutivamente
+- {video}_debug.srt       : Subtítulos con metadatos de TTS (rate, offsets, truncados)
+- {video}_con_tts.mkv     : Video final con audio TTS sincronizado
+- {video}_sin_pausas.mkv  : Video final sin pausas largas (si se usa --remove-breaks)
+- temp_audio_*/           : Carpeta temporal con archivos de audio (se elimina al finalizar)
+
+PROCESO
+=======
+
+1. VALIDACIÓN: Parsea y valida el archivo SRT
+2. GENERACIÓN TTS: Crea audios con velocidades 180-240 WPM según duración
+3. SRT DEBUG: Genera archivo debug con metadatos
+4. PROCESO VIDEO: Agrega freeze frames si es necesario
+5. SINCRONIZACIÓN: Construye pista de audio master sincronizada
+6. FUSIÓN: Combina video y audio
+7. LIMPIEZA: Elimina pausas largas si se solicitó
 
 Versión Python - Más fácil de debuguear y mantener que bash
 """
