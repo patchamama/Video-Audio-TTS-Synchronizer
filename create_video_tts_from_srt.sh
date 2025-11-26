@@ -434,12 +434,13 @@ validation_count=0
 
 while IFS= read -r line || [ -n "$line" ]; do
     if [[ $line =~ ^[0-9]+$ ]]; then
-        current_id=$line
+        # Limpiar espacios y caracteres extra del ID
+        current_id=$(echo "$line" | tr -d '[:space:]')
         reading_text=false
     elif [[ $line =~ ^[0-9]{2}:[0-9]{2}:[0-9]{2},[0-9]{3}\ --\>\ [0-9]{2}:[0-9]{2}:[0-9]{2},[0-9]{3} ]]; then
         # Extraer tiempos usando regex para evitar problemas con IFS
-        start_time=$(echo "$line" | sed -E 's/^([0-9]{2}:[0-9]{2}:[0-9]{2},[0-9]{3}).*$/\1/')
-        end_time=$(echo "$line" | sed -E 's/^.*--> ([0-9]{2}:[0-9]{2}:[0-9]{2},[0-9]{3})$/\1/')
+        start_time=$(echo "$line" | sed -E 's/^([0-9]{2}:[0-9]{2}:[0-9]{2},[0-9]{3}).*$/\1/' | tr -d '[:space:]')
+        end_time=$(echo "$line" | sed -E 's/^.*--> ([0-9]{2}:[0-9]{2}:[0-9]{2},[0-9]{3})$/\1/' | tr -d '[:space:]')
 
         # Validar que tiempo final >= tiempo inicial
         start_seconds_check=$(srt_time_to_seconds "$start_time")
@@ -464,6 +465,7 @@ while IFS= read -r line || [ -n "$line" ]; do
             fi
         fi
 
+        # Guardar timestamps temporalmente con el ID original
         subtitle_starts[$current_id]=$start_time
         subtitle_ends[$current_id]=$end_time
         reading_text=true
@@ -472,6 +474,16 @@ while IFS= read -r line || [ -n "$line" ]; do
         if [ -n "$current_text" ]; then
             # Incrementar ID consecutivo
             consecutive_id=$((consecutive_id + 1))
+
+            # Verificar que los timestamps existan
+            if [ -z "${subtitle_starts[$current_id]}" ] || [ -z "${subtitle_ends[$current_id]}" ]; then
+                echo -e "${RED}ERROR INTERNO: Timestamps vacíos para ID $current_id${NC}" >&2
+                echo -e "${YELLOW}  Esto indica un bug en el parser${NC}" >&2
+                current_id=""
+                current_text=""
+                reading_text=false
+                continue
+            fi
 
             # Guardar con ID consecutivo
             subtitle_ids+=("$consecutive_id")
