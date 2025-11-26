@@ -56,26 +56,48 @@ brew install ffmpeg
 
 **Linux/Ubuntu:**
 ```bash
-sudo apt-get install ffmpeg python3 python3-pip
-pip3 install gtts pydub
+sudo apt-get install ffmpeg python3
+sudo apt install python3-gtts python3-pydub
 ```
 
 ### Python
 
 - Python 3.7+
-- Dependencias:
-  - `gtts` (solo Linux)
-  - `pydub` (solo Linux)
+- Dependencias (Linux):
+  - `python3-gtts` (desde repositorios apt)
+  - `python3-pydub` (desde repositorios apt)
 
 ## 🚀 Instalación
 
+### Opción 1: Descarga Directa (Recomendado para uso rápido)
+
+```bash
+# Descargar solo el script Python
+wget https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/main/create_video_tts_from_srt.py
+
+# Descargar también el script auxiliar para gTTS (Linux)
+wget https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/main/generate_tts.py
+
+# Instalar dependencias (Linux)
+sudo apt-get install ffmpeg python3
+sudo apt install python3-gtts python3-pydub
+
+# Dar permisos de ejecución
+chmod +x create_video_tts_from_srt.py
+
+# Ejecutar
+python3 create_video_tts_from_srt.py mi_video.srt mi_video.mp4
+```
+
+### Opción 2: Clonar Repositorio Completo
+
 ```bash
 # Clonar el repositorio
-git clone https://github.com/tu-usuario/Video-Audio-TTS-Synchronizer.git
+git clone https://github.com/patchamama/Video-Audio-TTS-Synchronizer.git
 cd Video-Audio-TTS-Synchronizer
 
 # Instalar dependencias (Linux)
-pip3 install gtts pydub
+sudo apt install python3-gtts python3-pydub
 
 # Verificar ffmpeg
 ffmpeg -version
@@ -442,7 +464,7 @@ flowchart TD
 |---------|-------------|-----------|
 | `{video}_working.srt` | Subtítulos con IDs renumerados 1-N | Directorio de trabajo |
 | `{video}_debug.srt` | Subtítulos con metadatos TTS (rate, offsets, flags) | Directorio de trabajo |
-| `temp_audio_*/` | Carpeta temporal con audios individuales y master | `/tmp/` o `$TMPDIR` |
+| `temp_audio_*/` | Carpeta temporal con audios individuales y master | Directorio actual de trabajo |
 | `temp_audio_*/logs/` | Logs de generación TTS | Dentro de temp_audio |
 
 ### Salida Final

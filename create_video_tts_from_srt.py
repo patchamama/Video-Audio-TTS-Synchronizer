@@ -53,7 +53,7 @@ macOS:
 Linux/Otros:
   - ffmpeg
   - Python 3.x
-  - pip3 install gtts pydub
+  - sudo apt install python3-gtts python3-pydub
 
 ARCHIVOS GENERADOS
 ==================
@@ -62,7 +62,7 @@ ARCHIVOS GENERADOS
 - {video}_debug.srt       : Subtítulos con metadatos de TTS (rate, offsets, truncados)
 - {video}_con_tts.mkv     : Video final con audio TTS sincronizado
 - {video}_sin_pausas.mkv  : Video final sin pausas largas (si se usa --remove-breaks)
-- temp_audio_*/           : Carpeta temporal con archivos de audio (se elimina al finalizar)
+- temp_audio_YYYYMMDD_HHMMSS/ : Carpeta temporal en directorio actual (conservada en modo --test)
 
 PROCESO
 =======
@@ -99,6 +99,51 @@ class Colors:
     MAGENTA = '\033[0;35m'
     CYAN = '\033[0;36m'
     NC = '\033[0m'  # No Color
+
+class ErrorLogger:
+    """Registra errores durante la ejecución"""
+    def __init__(self):
+        self.errors: List[Dict[str, str]] = []
+        self.warnings: List[str] = []
+
+    def add_error(self, step: str, command: str, error_msg: str):
+        """Registra un error de ffmpeg"""
+        self.errors.append({
+            'step': step,
+            'command': command,
+            'error': error_msg
+        })
+
+    def add_warning(self, message: str):
+        """Registra una advertencia"""
+        self.warnings.append(message)
+
+    def has_errors(self) -> bool:
+        """Verifica si hay errores registrados"""
+        return len(self.errors) > 0
+
+    def print_summary(self):
+        """Imprime resumen de errores y advertencias"""
+        if self.warnings:
+            print(f"\n{Colors.YELLOW}{'═' * 50}{Colors.NC}")
+            print(f"{Colors.YELLOW}⚠️  ADVERTENCIAS ({len(self.warnings)}){Colors.NC}")
+            print(f"{Colors.YELLOW}{'═' * 50}{Colors.NC}")
+            for idx, warning in enumerate(self.warnings, 1):
+                print(f"{Colors.YELLOW}{idx}. {warning}{Colors.NC}")
+
+        if self.errors:
+            print(f"\n{Colors.RED}{'═' * 50}{Colors.NC}")
+            print(f"{Colors.RED}❌ ERRORES DETECTADOS ({len(self.errors)}){Colors.NC}")
+            print(f"{Colors.RED}{'═' * 50}{Colors.NC}")
+            for idx, error in enumerate(self.errors, 1):
+                print(f"\n{Colors.RED}Error {idx}:{Colors.NC}")
+                print(f"{Colors.CYAN}  Paso: {error['step']}{Colors.NC}")
+                print(f"{Colors.YELLOW}  Comando: {error['command']}{Colors.NC}")
+                print(f"{Colors.RED}  Error:{Colors.NC}")
+                # Mostrar últimas 15 líneas del error
+                error_lines = error['error'].strip().split('\n')
+                for line in error_lines[-15:]:
+                    print(f"    {line}")
 
 @dataclass
 class Subtitle:
@@ -149,7 +194,7 @@ class TTSEngine:
                 return "python"
             except ImportError:
                 print(f"{Colors.RED}✗ Error: Faltan dependencias de Python{Colors.NC}")
-                print(f"{Colors.YELLOW}Instala con: pip3 install gtts pydub{Colors.NC}")
+                print(f"{Colors.YELLOW}Instala con: sudo apt install python3-gtts python3-pydub{Colors.NC}")
                 sys.exit(1)
 
         print(f"{Colors.RED}✗ Error: No se encontró método TTS compatible{Colors.NC}")
@@ -375,29 +420,40 @@ def get_audio_duration(file_path: Path) -> float:
     except (subprocess.CalledProcessError, ValueError):
         return 0.0
 
-def create_silence(duration: float, output: Path):
+def create_silence(duration: float, output: Path, error_logger: Optional[ErrorLogger] = None):
     """Crea un archivo de audio con silencio"""
-    subprocess.run(
-        ["ffmpeg", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono",
-         "-t", str(duration), "-q:a", "9", "-acodec", "pcm_s16le",
-         str(output), "-y"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=True
-    )
-
-def truncate_audio(input_file: Path, output_file: Path, duration: float) -> bool:
-    """Trunca audio a la duración especificada"""
     try:
         subprocess.run(
+            ["ffmpeg", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono",
+             "-t", str(duration), "-q:a", "9", "-acodec", "pcm_s16le",
+             str(output), "-y"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True
+        )
+    except subprocess.CalledProcessError as e:
+        error_msg = f"Error creando silencio de {duration}s"
+        if error_logger:
+            error_logger.add_error("Crear silencio", ' '.join(e.cmd), e.stderr or error_msg)
+        print(f"{Colors.RED}{error_msg}{Colors.NC}")
+        raise
+
+def truncate_audio(input_file: Path, output_file: Path, duration: float, error_logger: Optional[ErrorLogger] = None) -> bool:
+    """Trunca audio a la duración especificada"""
+    try:
+        result = subprocess.run(
             ["ffmpeg", "-i", str(input_file), "-t", str(duration),
              "-c:a", "copy", str(output_file), "-y"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
             check=True
         )
         return output_file.exists() and output_file.stat().st_size > 0
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as e:
+        if error_logger:
+            error_logger.add_error("Truncar audio", ' '.join(e.cmd), e.stderr or "Error truncando audio")
         return False
 
 def main():
@@ -419,6 +475,9 @@ def main():
                        help="SOLO eliminar pausas del video (sin TTS)")
 
     args = parser.parse_args()
+
+    # Inicializar logger de errores
+    error_logger = ErrorLogger()
 
     # Mostrar configuración
     print(f"{Colors.BLUE}{'═' * 50}{Colors.NC}")
@@ -485,8 +544,11 @@ def main():
     print(f"{Colors.GREEN}✅ SRT de trabajo generado: {working_srt}{Colors.NC}")
     print(f"{Colors.CYAN}   (IDs renumerados: 1-{len(subtitles)}){Colors.NC}")
 
-    # Crear directorio temporal
-    temp_dir = Path(tempfile.mkdtemp(prefix="temp_audio_"))
+    # Crear directorio temporal en el directorio actual
+    import datetime
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    temp_dir = Path.cwd() / f"temp_audio_{timestamp}"
+    temp_dir.mkdir(exist_ok=True)
     logs_dir = temp_dir / "logs"
     logs_dir.mkdir(exist_ok=True)
     print(f"{Colors.GREEN}Carpeta temporal: {temp_dir}{Colors.NC}")
@@ -575,9 +637,10 @@ def main():
                 full_audio = temp_dir / f"{subtitle.consecutive_id}_full.wav"
 
                 if tts_engine.generate_audio(clean_text, 240, full_audio):
-                    if truncate_audio(full_audio, audio_file, available_time):
+                    if truncate_audio(full_audio, audio_file, available_time, error_logger):
                         full_audio.unlink()
                         rate_usage['truncated'] += 1
+                        error_logger.add_warning(f"Subtítulo {subtitle.consecutive_id}: Audio truncado a {available_time:.3f}s")
                         print(f"  {Colors.GREEN}✅ Audio truncado a {available_time:.3f}s{Colors.NC}")
 
                         audio_segments[subtitle.consecutive_id] = AudioSegment(
@@ -754,8 +817,9 @@ def main():
                          "-t", str(subtitle.duration),
                          "-c:v", "libx264", "-preset", "ultrafast", "-an",
                          str(seg_file), "-y"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
                         check=True
                     )
 
@@ -764,9 +828,15 @@ def main():
                         video_segments.append(seg_file)
                     else:
                         print(f"  {Colors.RED}✗ Error: segmento vacío{Colors.NC}")
+                        error_logger.add_warning(f"Subtítulo {subtitle.consecutive_id}: Segmento de video vacío")
                         continue
 
-                except subprocess.CalledProcessError:
+                except subprocess.CalledProcessError as e:
+                    error_logger.add_error(
+                        f"PASO 4: Extraer segmento de video (subtítulo {subtitle.consecutive_id})",
+                        ' '.join(e.cmd),
+                        e.stderr or "Error extrayendo segmento de video"
+                    )
                     print(f"  {Colors.RED}✗ Error creando segmento{Colors.NC}")
                     continue
 
@@ -783,8 +853,9 @@ def main():
                         subprocess.run(
                             ["ffmpeg", "-sseof", "-0.1", "-i", str(seg_file),
                              "-frames:v", "1", str(frame_file), "-y"],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True,
                             check=True
                         )
 
@@ -795,16 +866,23 @@ def main():
                                  "-t", str(freeze_dur), "-r", str(fps),
                                  "-pix_fmt", "yuv420p", "-c:v", "libx264",
                                  "-preset", "ultrafast", str(freeze_file), "-y"],
-                                stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                text=True,
                                 check=True
                             )
 
                             if freeze_file.exists() and freeze_file.stat().st_size > 0:
                                 video_segments.append(freeze_file)
+                                error_logger.add_warning(f"Subtítulo {subtitle.consecutive_id}: Freeze frame de {freeze_dur:.3f}s agregado")
                                 print(f"  {Colors.GREEN}✓ Freeze creado{Colors.NC}")
 
-                    except subprocess.CalledProcessError:
+                    except subprocess.CalledProcessError as e:
+                        error_logger.add_error(
+                            f"PASO 4: Crear freeze frame (subtítulo {subtitle.consecutive_id})",
+                            ' '.join(e.cmd),
+                            e.stderr or "Error creando freeze frame"
+                        )
                         print(f"  {Colors.YELLOW}⚠ Error creando freeze{Colors.NC}")
 
             # Concatenar segmentos
@@ -823,8 +901,9 @@ def main():
                         ["ffmpeg", "-f", "concat", "-safe", "0",
                          "-i", str(concat_list), "-c", "copy",
                          str(processed_video), "-y"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
                         check=True
                     )
 
@@ -832,10 +911,20 @@ def main():
                         video_to_use = processed_video
                         print(f"{Colors.GREEN}✓ Video procesado{Colors.NC}")
                     else:
+                        error_logger.add_error(
+                            "PASO 4: Concatenar segmentos de video",
+                            "ffmpeg concat",
+                            "Video concatenado está vacío"
+                        )
                         print(f"{Colors.RED}✗ Error: video vacío{Colors.NC}")
                         sys.exit(1)
 
-                except subprocess.CalledProcessError:
+                except subprocess.CalledProcessError as e:
+                    error_logger.add_error(
+                        "PASO 4: Concatenar segmentos de video",
+                        ' '.join(e.cmd),
+                        e.stderr or "Error concatenando segmentos de video"
+                    )
                     print(f"{Colors.RED}✗ Error concatenando{Colors.NC}")
                     sys.exit(1)
             else:
@@ -851,7 +940,7 @@ def main():
 
     # Crear audio master con silencio inicial
     audio_master = temp_dir / "audio_master.wav"
-    create_silence(0.001, audio_master)
+    create_silence(0.001, audio_master, error_logger)
     current_master_duration = 0.0
     concat_counter = 0  # Contador para nombres únicos
 
@@ -873,19 +962,29 @@ def main():
         if gap > 0.01:
             print(f"  {Colors.GREEN}→ Agregando silencio de {gap:.3f}s{Colors.NC}")
             gap_file = temp_dir / f"gap_{subtitle.consecutive_id}.wav"
-            create_silence(gap, gap_file)
+            create_silence(gap, gap_file, error_logger)
 
             # Concatenar con nombre único
             concat_counter += 1
             temp_master = temp_dir / f"audio_concat_{concat_counter}.wav"
-            subprocess.run(
-                ["ffmpeg", "-i", str(audio_master), "-i", str(gap_file),
-                 "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[out]",
-                 "-map", "[out]", str(temp_master), "-y"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=True
-            )
+            try:
+                subprocess.run(
+                    ["ffmpeg", "-i", str(audio_master), "-i", str(gap_file),
+                     "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[out]",
+                     "-map", "[out]", str(temp_master), "-y"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=True
+                )
+            except subprocess.CalledProcessError as e:
+                error_logger.add_error(
+                    f"PASO 5: Concatenar gap (subtítulo {subtitle.consecutive_id})",
+                    ' '.join(e.cmd),
+                    e.stderr or "Error concatenando silencio gap"
+                )
+                print(f"{Colors.RED}Error concatenando gap{Colors.NC}")
+                raise
             # Eliminar master anterior si no es el inicial
             if audio_master != temp_dir / "audio_master.wav":
                 audio_master.unlink()
@@ -902,14 +1001,24 @@ def main():
 
         concat_counter += 1
         temp_master = temp_dir / f"audio_concat_{concat_counter}.wav"
-        subprocess.run(
-            ["ffmpeg", "-i", str(audio_master), "-i", str(segment.audio_file),
-             "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[out]",
-             "-map", "[out]", str(temp_master), "-y"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=True
-        )
+        try:
+            subprocess.run(
+                ["ffmpeg", "-i", str(audio_master), "-i", str(segment.audio_file),
+                 "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[out]",
+                 "-map", "[out]", str(temp_master), "-y"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True
+            )
+        except subprocess.CalledProcessError as e:
+            error_logger.add_error(
+                f"PASO 5: Concatenar audio TTS (subtítulo {subtitle.consecutive_id})",
+                ' '.join(e.cmd),
+                e.stderr or "Error concatenando audio TTS"
+            )
+            print(f"{Colors.RED}Error concatenando audio TTS{Colors.NC}")
+            raise
         # Eliminar master anterior
         if audio_master != temp_dir / "audio_master.wav":
             audio_master.unlink()
@@ -928,18 +1037,28 @@ def main():
         if padding > 0.01:
             print(f"  {Colors.GREEN}→ Agregando padding de {padding:.3f}s{Colors.NC}")
             padding_file = temp_dir / f"padding_{subtitle.consecutive_id}.wav"
-            create_silence(padding, padding_file)
+            create_silence(padding, padding_file, error_logger)
 
             concat_counter += 1
             temp_master = temp_dir / f"audio_concat_{concat_counter}.wav"
-            subprocess.run(
-                ["ffmpeg", "-i", str(audio_master), "-i", str(padding_file),
-                 "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[out]",
-                 "-map", "[out]", str(temp_master), "-y"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=True
-            )
+            try:
+                subprocess.run(
+                    ["ffmpeg", "-i", str(audio_master), "-i", str(padding_file),
+                     "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[out]",
+                     "-map", "[out]", str(temp_master), "-y"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=True
+                )
+            except subprocess.CalledProcessError as e:
+                error_logger.add_error(
+                    "PASO 5: Concatenar padding",
+                    ' '.join(e.cmd),
+                    e.stderr or "Error concatenando padding"
+                )
+                print(f"{Colors.RED}Error concatenando padding{Colors.NC}")
+                raise
             # Eliminar master anterior
             if audio_master != temp_dir / "audio_master.wav":
                 audio_master.unlink()
@@ -1087,8 +1206,9 @@ def main():
                             ["ffmpeg", "-i", str(output_video),
                              "-ss", str(start), "-t", str(duration),
                              "-c", "copy", str(seg_file), "-y"],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True,
                             check=True
                         )
 
@@ -1096,9 +1216,15 @@ def main():
                             segment_files.append(seg_file)
                             print(f"{Colors.GREEN}    ✓ Segmento creado{Colors.NC}")
                         else:
+                            error_logger.add_warning(f"PASO 7: Segmento {idx+1} está vacío")
                             print(f"{Colors.RED}    ✗ Error: segmento vacío{Colors.NC}")
 
-                    except subprocess.CalledProcessError:
+                    except subprocess.CalledProcessError as e:
+                        error_logger.add_error(
+                            f"PASO 7: Extraer segmento {idx+1} sin pausas",
+                            ' '.join(e.cmd),
+                            e.stderr or "Error extrayendo segmento"
+                        )
                         print(f"{Colors.RED}    ✗ Error creando segmento{Colors.NC}")
 
             # Concatenar segmentos
@@ -1120,8 +1246,9 @@ def main():
                         ["ffmpeg", "-f", "concat", "-safe", "0",
                          "-i", str(concat_list), "-c", "copy",
                          str(output_video_clean), "-y"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
                         check=True
                     )
 
@@ -1131,9 +1258,19 @@ def main():
                         print(f"{Colors.GREEN}✓ Tiempo total eliminado: {total_removed:.1f}s "
                               f"({total_removed/60:.1f} min){Colors.NC}")
                     else:
+                        error_logger.add_error(
+                            "PASO 7: Concatenar segmentos sin pausas",
+                            "ffmpeg concat",
+                            "Video concatenado está vacío"
+                        )
                         print(f"{Colors.RED}✗ Error: video vacío{Colors.NC}")
 
-                except subprocess.CalledProcessError:
+                except subprocess.CalledProcessError as e:
+                    error_logger.add_error(
+                        "PASO 7: Concatenar segmentos sin pausas",
+                        ' '.join(e.cmd),
+                        e.stderr or "Error concatenando segmentos"
+                    )
                     print(f"{Colors.RED}✗ Error concatenando segmentos{Colors.NC}")
             else:
                 print(f"{Colors.RED}✗ No se crearon segmentos válidos{Colors.NC}")
@@ -1156,11 +1293,15 @@ def main():
     print(f"{Colors.GREEN}✅ {working_srt}{Colors.NC}")
     print(f"{Colors.GREEN}✅ {debug_srt}{Colors.NC}")
 
+    # Mostrar resumen de errores si los hay
+    if args.test or error_logger.has_errors() or error_logger.warnings:
+        error_logger.print_summary()
+
     if args.test or args.only_remove_breaks:
         print(f"{Colors.YELLOW}⚠️  Conservando: {temp_dir}{Colors.NC}")
     else:
         print(f"{Colors.YELLOW}Limpiando temporales...{Colors.NC}")
-        # shutil.rmtree(temp_dir)  # Descomentardescomentaryar cuando esté probado
+        # shutil.rmtree(temp_dir)  # Descomentar cuando esté probado
 
     print(f"{Colors.GREEN}¡Proceso completado!{Colors.NC}")
 
