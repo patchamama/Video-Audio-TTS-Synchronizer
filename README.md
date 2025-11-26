@@ -33,7 +33,7 @@ Este proyecto permite convertir archivos de subtítulos (SRT) en audio sincroniz
 - ✅ **Freeze frames automáticos**: Congela video cuando el audio es más largo que el subtítulo
 - ✅ **Sincronización precisa**: Construye pista de audio master alineada con timestamps
 - ✅ **Eliminación de pausas**: Remueve gaps mayores a 15 minutos
-- ✅ **Multi-plataforma**: Compatible con macOS (say) y Linux (gTTS)
+- ✅ **Multi-plataforma**: Compatible con macOS (say), Linux (gTTS + espeak-ng) y Windows (edge-tts + SAPI)
 - ✅ **Modo test**: Procesar solo N subtítulos para pruebas rápidas
 - ✅ **Progreso visual**: Indicadores de progreso cada 100 subtítulos
 - ✅ **SRT debug**: Genera archivo con metadatos de TTS para inspección
@@ -58,7 +58,21 @@ brew install ffmpeg
 **Linux/Ubuntu:**
 ```bash
 sudo apt-get install ffmpeg python3
-sudo apt install python3-gtts python3-pydub
+sudo apt install python3-gtts python3-pydub espeak-ng  # espeak-ng es fallback offline
+```
+
+**Windows:**
+```bash
+# Instalar Python desde https://www.python.org/downloads/
+# Instalar ffmpeg desde https://ffmpeg.org/download.html
+
+# Opción 1: edge-tts (online, alta calidad)
+pip install edge-tts
+
+# Opción 2: pyttsx3 (offline, fallback)
+pip install pyttsx3
+
+# Nota: El script detecta automáticamente el sistema y usa el motor apropiado
 ```
 
 ### Python
@@ -114,6 +128,40 @@ ffmpeg -version
 # Dar permisos de ejecución
 chmod +x create_video_tts_from_srt.py
 ```
+
+## 🌍 Soporte Multi-Plataforma con Fallback Automático
+
+El script detecta automáticamente tu sistema operativo y selecciona el motor TTS más apropiado con fallback inteligente:
+
+### macOS
+```
+└─ comando 'say' (nativo)
+   └─ Voz: Paulina (español)
+```
+
+### Linux
+```
+┌─ gTTS (Google TTS) - online, alta calidad
+│  ├─ 3 reintentos automáticos con backoff exponencial
+│  └─ Requiere internet
+└─ espeak-ng - offline, fallback confiable
+   └─ Voz sintética pero siempre disponible
+```
+
+### Windows
+```
+┌─ edge-tts (Microsoft Edge TTS) - online, alta calidad
+│  ├─ Voz neural: es-ES-ElviraNeural
+│  └─ Requiere internet
+└─ SAPI/pyttsx3 - offline, fallback nativo
+   └─ Usa voces instaladas en Windows
+```
+
+**Ventajas del sistema de fallback:**
+- ✅ No requiere configuración manual
+- ✅ Prioriza calidad cuando hay internet
+- ✅ Garantiza funcionamiento offline
+- ✅ Manejo automático de errores de conexión
 
 ## 💻 Uso
 

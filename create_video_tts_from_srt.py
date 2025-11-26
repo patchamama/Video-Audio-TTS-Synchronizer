@@ -175,24 +175,30 @@ class TTSEngine:
 
     def _detect_method(self) -> str:
         """Detecta el método TTS disponible"""
-        if platform.system() == "Darwin":
+        system = platform.system()
+
+        if system == "Darwin":
             if shutil.which("say"):
                 print(f"{Colors.GREEN}✓ Sistema: macOS - Usando comando 'say'{Colors.NC}")
                 return "say"
 
-        # Intentar usar gTTS para Linux/otros
+        elif system == "Windows":
+            print(f"{Colors.GREEN}✓ Sistema: Windows - Usando edge-tts (con fallback a SAPI){Colors.NC}")
+            return "windows"
+
+        # Linux u otros sistemas
         try:
             import gtts
             from pydub import AudioSegment
-            print(f"{Colors.GREEN}✓ Sistema: Linux/Otro - Usando Python + gTTS (con fallback a espeak-ng){Colors.NC}")
-            return "python"
+            print(f"{Colors.GREEN}✓ Sistema: Linux - Usando gTTS (con fallback a espeak-ng){Colors.NC}")
+            return "linux"
         except ImportError:
             print(f"{Colors.RED}✗ Error: Faltan dependencias de Python{Colors.NC}")
             print(f"{Colors.YELLOW}Instala con: sudo apt install python3-gtts python3-pydub{Colors.NC}")
             sys.exit(1)
 
     def _generate_with_espeak(self, text: str, rate: int, output_file: Path) -> bool:
-        """Genera audio usando espeak-ng (offline fallback)"""
+        """Genera audio usando espeak-ng (offline fallback para Linux)"""
         try:
             # Verificar que espeak-ng está instalado
             if not shutil.which("espeak-ng"):
@@ -220,6 +226,79 @@ class TTSEngine:
         except Exception as e:
             return False
 
+    def _generate_with_edge_tts(self, text: str, rate: int, output_file: Path) -> bool:
+        """Genera audio usando edge-tts (Windows online)"""
+        try:
+            # Calcular rate para edge-tts (en porcentaje)
+            # rate 180 = normal (0%), 200 = +11%, 220 = +22%, 240 = +33%
+            rate_percent = int(((rate - 180) / 180) * 100)
+            rate_arg = f"+{rate_percent}%" if rate_percent >= 0 else f"{rate_percent}%"
+
+            # Generar MP3 primero con edge-tts
+            temp_mp3 = output_file.with_suffix('.mp3')
+
+            cmd = [
+                sys.executable, '-m', 'edge_tts',
+                '--text', text,
+                '--voice', 'es-ES-ElviraNeural',
+                '--rate', rate_arg,
+                '--write-media', str(temp_mp3)
+            ]
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=30
+            )
+
+            # Convertir MP3 a WAV con ffmpeg
+            if temp_mp3.exists():
+                subprocess.run(
+                    ['ffmpeg', '-i', str(temp_mp3), str(output_file), '-y'],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                temp_mp3.unlink()
+                return output_file.exists()
+
+            return False
+
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as e:
+            return False
+        except Exception as e:
+            return False
+
+    def _generate_with_sapi(self, text: str, rate: int, output_file: Path) -> bool:
+        """Genera audio usando SAPI de Windows (offline fallback para Windows)"""
+        try:
+            import pyttsx3
+
+            engine = pyttsx3.init()
+
+            # Buscar voz en español
+            voices = engine.getProperty('voices')
+            for voice in voices:
+                if 'spanish' in voice.name.lower() or 'es' in str(voice.languages).lower():
+                    engine.setProperty('voice', voice.id)
+                    break
+
+            # Configurar velocidad (pyttsx3 usa WPM directamente)
+            engine.setProperty('rate', rate)
+
+            # Generar audio
+            engine.save_to_file(text, str(output_file))
+            engine.runAndWait()
+
+            return output_file.exists()
+
+        except ImportError:
+            return False
+        except Exception as e:
+            return False
+
     def generate_audio(self, text: str, rate: int, output_file: Path) -> bool:
         """Genera audio TTS con el rate especificado"""
         try:
@@ -240,8 +319,26 @@ class TTSEngine:
                 aiff_file.unlink()
                 return True
 
-            elif self.method == "python":
-                # Python gTTS integrado con reintentos
+            elif self.method == "windows":
+                # Windows: Intentar edge-tts primero, luego SAPI
+                import time
+
+                # Intentar con edge-tts (online, mejor calidad)
+                if self._generate_with_edge_tts(text, rate, output_file):
+                    return True
+
+                # Si edge-tts falla, usar SAPI (offline fallback)
+                print(f"{Colors.CYAN}  🔄 edge-tts no disponible, usando SAPI (TTS offline)...{Colors.NC}")
+                if self._generate_with_sapi(text, rate, output_file):
+                    print(f"{Colors.GREEN}  ✓ Audio generado con SAPI{Colors.NC}")
+                    return True
+                else:
+                    print(f"{Colors.RED}  ✗ SAPI no está disponible{Colors.NC}")
+                    print(f"{Colors.YELLOW}  Instala con: pip install pyttsx3{Colors.NC}")
+                    return False
+
+            elif self.method == "linux":
+                # Linux: gTTS integrado con reintentos y fallback a espeak-ng
                 from gtts import gTTS
                 from pydub import AudioSegment
                 from pydub.effects import speedup
