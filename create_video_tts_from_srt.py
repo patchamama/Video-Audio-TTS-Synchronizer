@@ -184,12 +184,41 @@ class TTSEngine:
         try:
             import gtts
             from pydub import AudioSegment
-            print(f"{Colors.GREEN}✓ Sistema: Linux/Otro - Usando Python + gTTS{Colors.NC}")
+            print(f"{Colors.GREEN}✓ Sistema: Linux/Otro - Usando Python + gTTS (con fallback a espeak-ng){Colors.NC}")
             return "python"
         except ImportError:
             print(f"{Colors.RED}✗ Error: Faltan dependencias de Python{Colors.NC}")
             print(f"{Colors.YELLOW}Instala con: sudo apt install python3-gtts python3-pydub{Colors.NC}")
             sys.exit(1)
+
+    def _generate_with_espeak(self, text: str, rate: int, output_file: Path) -> bool:
+        """Genera audio usando espeak-ng (offline fallback)"""
+        try:
+            # Verificar que espeak-ng está instalado
+            if not shutil.which("espeak-ng"):
+                return False
+
+            cmd = [
+                'espeak-ng',
+                '-v', 'es',              # Voz en español
+                '-s', str(rate),         # Velocidad en WPM
+                '-w', str(output_file),  # Archivo de salida WAV
+                text                     # Texto a convertir
+            ]
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+
+            return output_file.exists()
+
+        except subprocess.CalledProcessError as e:
+            return False
+        except Exception as e:
+            return False
 
     def generate_audio(self, text: str, rate: int, output_file: Path) -> bool:
         """Genera audio TTS con el rate especificado"""
@@ -267,13 +296,16 @@ class TTSEngine:
                                 retry_delay *= 2  # Backoff exponencial
                                 continue
                             else:
-                                print(f"{Colors.RED}  ✗ Error: gTTS no puede conectarse a Google después de {max_retries} intentos{Colors.NC}")
-                                print(f"{Colors.YELLOW}  Posibles causas:{Colors.NC}")
-                                print(f"{Colors.YELLOW}    1. Sin conexión a internet{Colors.NC}")
-                                print(f"{Colors.YELLOW}    2. Firewall bloqueando acceso a Google TTS{Colors.NC}")
-                                print(f"{Colors.YELLOW}    3. Proxy o VPN interferiendo{Colors.NC}")
-                                print(f"{Colors.CYAN}  💡 Sugerencia: Verifica tu conexión a internet{Colors.NC}")
-                                return False
+                                print(f"{Colors.RED}  ✗ gTTS falló después de {max_retries} intentos{Colors.NC}")
+                                print(f"{Colors.CYAN}  🔄 Intentando con espeak-ng (TTS offline)...{Colors.NC}")
+                                # Intentar con espeak-ng como fallback
+                                if self._generate_with_espeak(text, rate, output_file):
+                                    print(f"{Colors.GREEN}  ✓ Audio generado con espeak-ng{Colors.NC}")
+                                    return True
+                                else:
+                                    print(f"{Colors.RED}  ✗ espeak-ng no está disponible{Colors.NC}")
+                                    print(f"{Colors.YELLOW}  Instala con: sudo apt-get install espeak-ng{Colors.NC}")
+                                    return False
                         else:
                             # Otro tipo de error
                             print(f"{Colors.RED}  ✗ Error generando TTS: {error_msg}{Colors.NC}")
@@ -281,8 +313,20 @@ class TTSEngine:
                                 time.sleep(retry_delay)
                                 retry_delay *= 2
                                 continue
-                            return False
+                            else:
+                                # Intentar con espeak-ng como fallback
+                                print(f"{Colors.CYAN}  🔄 Intentando con espeak-ng (TTS offline)...{Colors.NC}")
+                                if self._generate_with_espeak(text, rate, output_file):
+                                    print(f"{Colors.GREEN}  ✓ Audio generado con espeak-ng{Colors.NC}")
+                                    return True
+                                else:
+                                    return False
 
+                # Si llegamos aquí, intentar con espeak-ng
+                print(f"{Colors.CYAN}  🔄 Intentando con espeak-ng (TTS offline)...{Colors.NC}")
+                if self._generate_with_espeak(text, rate, output_file):
+                    print(f"{Colors.GREEN}  ✓ Audio generado con espeak-ng{Colors.NC}")
+                    return True
                 return False
 
         except Exception as e:
