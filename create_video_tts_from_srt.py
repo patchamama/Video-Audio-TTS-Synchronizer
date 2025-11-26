@@ -624,13 +624,451 @@ def main():
 
     print(f"{Colors.GREEN}✅ Archivo SRT debug generado: {debug_srt}{Colors.NC}")
 
-    # TODO: Implementar pasos 4-7 (video processing, audio sync, merge, break removal)
-    print(f"\n{Colors.GREEN}✅ Implementación principal completada{Colors.NC}")
-    print(f"{Colors.YELLOW}Nota: Pasos de procesamiento de video en desarrollo...{Colors.NC}")
-    print(f"{Colors.CYAN}Archivos generados:{Colors.NC}")
-    print(f"{Colors.GREEN}  - {working_srt}{Colors.NC}")
-    print(f"{Colors.GREEN}  - {debug_srt}{Colors.NC}")
-    print(f"{Colors.YELLOW}  - Audios en: {temp_dir}{Colors.NC}")
+    # PASO 4: Procesar video
+    print(f"{Colors.BLUE}{'═' * 50}{Colors.NC}")
+    print(f"{Colors.BLUE}🎬 PASO 4: PROCESAR VIDEO{Colors.NC}")
+    print(f"{Colors.BLUE}{'═' * 50}{Colors.NC}")
+
+    video_to_use = video_path
+
+    if args.solo_audio:
+        print(f"{Colors.CYAN}Modo solo-audio: Saltando procesamiento de video{Colors.NC}")
+        video_to_use = None
+    elif args.no_freeze:
+        print(f"{Colors.CYAN}Modo no-freeze: Usando video original{Colors.NC}")
+    else:
+        if freeze_count > 0:
+            print(f"{Colors.YELLOW}Procesando video con freezes...{Colors.NC}")
+
+            # Obtener FPS del video
+            try:
+                result = subprocess.run(
+                    ["ffprobe", "-v", "error", "-select_streams", "v:0",
+                     "-show_entries", "stream=r_frame_rate",
+                     "-of", "default=noprint_wrappers=1:nokey=1", str(video_path)],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                fps_str = result.stdout.strip()
+                if '/' in fps_str:
+                    num, denom = fps_str.split('/')
+                    fps = float(num) / float(denom)
+                else:
+                    fps = float(fps_str)
+            except:
+                fps = 30.0
+
+            print(f"{Colors.GREEN}FPS: {fps:.2f}{Colors.NC}")
+
+            video_segments = []
+
+            for subtitle in subtitles:
+                segment = audio_segments.get(subtitle.consecutive_id)
+                if not segment:
+                    continue
+
+                print(f"{Colors.YELLOW}Segmento {subtitle.consecutive_id} "
+                      f"({subtitle.start_seconds:.3f}s, {subtitle.duration:.3f}s){Colors.NC}")
+
+                seg_file = temp_dir / f"vseg_{subtitle.consecutive_id}.mkv"
+
+                # Extraer segmento de video
+                try:
+                    subprocess.run(
+                        ["ffmpeg", "-i", str(video_path),
+                         "-ss", str(subtitle.start_seconds),
+                         "-t", str(subtitle.duration),
+                         "-c:v", "libx264", "-preset", "ultrafast", "-an",
+                         str(seg_file), "-y"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=True
+                    )
+
+                    if seg_file.exists() and seg_file.stat().st_size > 0:
+                        print(f"  {Colors.GREEN}✓ Segmento creado{Colors.NC}")
+                        video_segments.append(seg_file)
+                    else:
+                        print(f"  {Colors.RED}✗ Error: segmento vacío{Colors.NC}")
+                        continue
+
+                except subprocess.CalledProcessError:
+                    print(f"  {Colors.RED}✗ Error creando segmento{Colors.NC}")
+                    continue
+
+                # Crear freeze si es necesario
+                if segment.needs_freeze:
+                    freeze_dur = segment.freeze_duration
+                    print(f"  {Colors.YELLOW}+ Creando freeze de {freeze_dur:.3f}s...{Colors.NC}")
+
+                    frame_file = temp_dir / f"freeze_{subtitle.consecutive_id}.png"
+                    freeze_file = temp_dir / f"vfreeze_{subtitle.consecutive_id}.mkv"
+
+                    try:
+                        # Extraer último frame
+                        subprocess.run(
+                            ["ffmpeg", "-sseof", "-0.1", "-i", str(seg_file),
+                             "-frames:v", "1", str(frame_file), "-y"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            check=True
+                        )
+
+                        if frame_file.exists() and frame_file.stat().st_size > 0:
+                            # Crear video de freeze
+                            subprocess.run(
+                                ["ffmpeg", "-loop", "1", "-i", str(frame_file),
+                                 "-t", str(freeze_dur), "-r", str(fps),
+                                 "-pix_fmt", "yuv420p", "-c:v", "libx264",
+                                 "-preset", "ultrafast", str(freeze_file), "-y"],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                                check=True
+                            )
+
+                            if freeze_file.exists() and freeze_file.stat().st_size > 0:
+                                video_segments.append(freeze_file)
+                                print(f"  {Colors.GREEN}✓ Freeze creado{Colors.NC}")
+
+                    except subprocess.CalledProcessError:
+                        print(f"  {Colors.YELLOW}⚠ Error creando freeze{Colors.NC}")
+
+            # Concatenar segmentos
+            if video_segments:
+                print(f"{Colors.YELLOW}Concatenando {len(video_segments)} segmentos...{Colors.NC}")
+
+                concat_list = temp_dir / "video_segments.txt"
+                with open(concat_list, 'w') as f:
+                    for seg in video_segments:
+                        f.write(f"file '{seg.name}'\n")
+
+                processed_video = temp_dir / "video_processed.mkv"
+
+                try:
+                    subprocess.run(
+                        ["ffmpeg", "-f", "concat", "-safe", "0",
+                         "-i", str(concat_list), "-c", "copy",
+                         str(processed_video), "-y"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=True
+                    )
+
+                    if processed_video.exists() and processed_video.stat().st_size > 0:
+                        video_to_use = processed_video
+                        print(f"{Colors.GREEN}✓ Video procesado{Colors.NC}")
+                    else:
+                        print(f"{Colors.RED}✗ Error: video vacío{Colors.NC}")
+                        sys.exit(1)
+
+                except subprocess.CalledProcessError:
+                    print(f"{Colors.RED}✗ Error concatenando{Colors.NC}")
+                    sys.exit(1)
+            else:
+                print(f"{Colors.RED}✗ No se crearon segmentos{Colors.NC}")
+                sys.exit(1)
+        else:
+            print(f"{Colors.GREEN}Sin freezes, usando video original{Colors.NC}")
+
+    # PASO 5: Construir audio sincronizado
+    print(f"{Colors.BLUE}{'═' * 50}{Colors.NC}")
+    print(f"{Colors.BLUE}🎵 PASO 5: CONSTRUIR AUDIO SINCRONIZADO{Colors.NC}")
+    print(f"{Colors.BLUE}{'═' * 50}{Colors.NC}")
+
+    # Crear audio master con silencio inicial
+    audio_master = temp_dir / "audio_master.wav"
+    create_silence(0.001, audio_master)
+    current_master_duration = 0.0
+
+    for idx, subtitle in enumerate(subtitles):
+        segment = audio_segments.get(subtitle.consecutive_id)
+        if not segment:
+            continue
+
+        print(f"{Colors.YELLOW}{'━' * 50}{Colors.NC}")
+        print(f"{Colors.YELLOW}Subtítulo {subtitle.consecutive_id} "
+              f"(inicio: {subtitle.start_seconds:.3f}s){Colors.NC}")
+
+        # Verificar duración actual del audio master
+        current_master_duration = get_audio_duration(audio_master)
+
+        # Agregar gap si es necesario
+        gap = subtitle.start_seconds - current_master_duration
+
+        if gap > 0.01:
+            print(f"  {Colors.GREEN}→ Agregando silencio de {gap:.3f}s{Colors.NC}")
+            gap_file = temp_dir / f"gap_{subtitle.consecutive_id}.wav"
+            create_silence(gap, gap_file)
+
+            # Concatenar
+            temp_master = temp_dir / "audio_master_temp.wav"
+            subprocess.run(
+                ["ffmpeg", "-i", str(audio_master), "-i", str(gap_file),
+                 "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[out]",
+                 "-map", "[out]", str(temp_master), "-y"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True
+            )
+            audio_master = temp_master
+            gap_file.unlink()
+            current_master_duration = get_audio_duration(audio_master)
+
+        # Agregar audio TTS
+        audio_duration = get_audio_duration(segment.audio_file)
+        print(f"  {Colors.GREEN}→ Agregando audio TTS ({audio_duration:.3f}s){Colors.NC}")
+
+        if segment.was_truncated:
+            print(f"  {Colors.MAGENTA}  (Audio truncado){Colors.NC}")
+
+        temp_master = temp_dir / "audio_master_temp2.wav"
+        subprocess.run(
+            ["ffmpeg", "-i", str(audio_master), "-i", str(segment.audio_file),
+             "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[out]",
+             "-map", "[out]", str(temp_master), "-y"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True
+        )
+        audio_master = temp_master
+        current_master_duration = get_audio_duration(audio_master)
+
+        # Agregar padding si es necesario
+        if idx + 1 < len(subtitles):
+            next_subtitle = subtitles[idx + 1]
+            expected_position = next_subtitle.start_seconds
+        else:
+            expected_position = subtitle.start_seconds + subtitle.duration
+
+        padding = expected_position - current_master_duration
+
+        if padding > 0.01:
+            print(f"  {Colors.GREEN}→ Agregando padding de {padding:.3f}s{Colors.NC}")
+            padding_file = temp_dir / f"padding_{subtitle.consecutive_id}.wav"
+            create_silence(padding, padding_file)
+
+            temp_master = temp_dir / "audio_master_temp3.wav"
+            subprocess.run(
+                ["ffmpeg", "-i", str(audio_master), "-i", str(padding_file),
+                 "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[out]",
+                 "-map", "[out]", str(temp_master), "-y"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True
+            )
+            audio_master = temp_master
+            padding_file.unlink()
+            current_master_duration = get_audio_duration(audio_master)
+
+        # Verificar sincronización
+        final_diff = abs(current_master_duration - expected_position)
+
+        if final_diff < 0.05:
+            print(f"  {Colors.GREEN}✅ Sincronizado (diff: {final_diff:.3f}s){Colors.NC}")
+        else:
+            print(f"  {Colors.RED}❌ Desincronizado (diff: {final_diff:.3f}s){Colors.NC}")
+
+    audio_final = temp_dir / "audio_final.wav"
+    audio_master.rename(audio_final)
+    print(f"{Colors.GREEN}✅ Audio final creado{Colors.NC}")
+
+    # PASO 6: Fusionar video y audio
+    print(f"{Colors.BLUE}{'═' * 50}{Colors.NC}")
+    print(f"{Colors.BLUE}🎞️  PASO 6: FUSIONAR VIDEO Y AUDIO{Colors.NC}")
+    print(f"{Colors.BLUE}{'═' * 50}{Colors.NC}")
+
+    if args.solo_audio:
+        output_audio_wav = video_path.with_suffix('').with_name(f"{video_path.stem}_tts_audio.wav")
+        output_audio_aac = video_path.with_suffix('').with_name(f"{video_path.stem}_tts_audio.aac")
+
+        shutil.copy(audio_final, output_audio_wav)
+        print(f"{Colors.GREEN}✅ Audio: {output_audio_wav}{Colors.NC}")
+
+        # Convertir a AAC
+        try:
+            subprocess.run(
+                ["ffmpeg", "-i", str(output_audio_wav),
+                 "-c:a", "aac", "-b:a", "192k",
+                 str(output_audio_aac), "-y"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True
+            )
+            if output_audio_aac.exists():
+                print(f"{Colors.GREEN}✅ Audio AAC: {output_audio_aac}{Colors.NC}")
+        except subprocess.CalledProcessError:
+            pass
+
+        output_video = None
+    else:
+        output_video = video_path.with_suffix('').with_name(f"{video_path.stem}_con_tts.mkv")
+
+        try:
+            subprocess.run(
+                ["ffmpeg", "-i", str(video_to_use), "-i", str(audio_final),
+                 "-map", "0:v:0", "-map", "1:a:0",
+                 "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+                 "-shortest", str(output_video), "-y"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True
+            )
+
+            if not output_video.exists():
+                print(f"{Colors.RED}✗ Error creando video{Colors.NC}")
+                sys.exit(1)
+
+            print(f"{Colors.GREEN}✅ Video: {output_video}{Colors.NC}")
+
+        except subprocess.CalledProcessError:
+            print(f"{Colors.RED}✗ Error fusionando video y audio{Colors.NC}")
+            sys.exit(1)
+
+    # PASO 7: Eliminar pausas largas (si está activado)
+    output_video_clean = None
+    if (args.remove_breaks or args.only_remove_breaks) and not args.solo_audio and output_video:
+        print(f"{Colors.BLUE}{'═' * 50}{Colors.NC}")
+        print(f"{Colors.BLUE}✂️  PASO 7: ELIMINAR PAUSAS LARGAS DEL VIDEO{Colors.NC}")
+        print(f"{Colors.BLUE}{'═' * 50}{Colors.NC}")
+
+        MIN_GAP_SECONDS = 900  # 15 minutos
+        MARGIN_SECONDS = 60     # 1 minuto de margen
+
+        print(f"{Colors.YELLOW}Analizando gaps en los subtítulos...{Colors.NC}")
+
+        gaps = []
+        for idx in range(len(subtitles) - 1):
+            current = subtitles[idx]
+            next_sub = subtitles[idx + 1]
+
+            gap = next_sub.start_seconds - current.end_seconds
+
+            if gap >= MIN_GAP_SECONDS:
+                cut_start = current.end_seconds + MARGIN_SECONDS
+                cut_end = next_sub.start_seconds - MARGIN_SECONDS
+                cut_duration = cut_end - cut_start
+
+                if cut_duration > 0:
+                    gaps.append((cut_start, cut_end))
+                    print(f"{Colors.YELLOW}  ✓ Gap detectado: {gap:.1f}s "
+                          f"({gap/60:.1f} min) entre subtítulo {current.consecutive_id} "
+                          f"y {next_sub.consecutive_id}{Colors.NC}")
+                    print(f"{Colors.GREEN}    → Se eliminará: {cut_duration:.1f}s "
+                          f"({cut_duration/60:.1f} min){Colors.NC}")
+
+        if not gaps:
+            print(f"{Colors.GREEN}✓ No se encontraron pausas largas (>15 min){Colors.NC}")
+        else:
+            print(f"{Colors.CYAN}{'═' * 50}{Colors.NC}")
+            print(f"{Colors.CYAN}Total de pausas a eliminar: {len(gaps)}{Colors.NC}")
+
+            # Calcular segmentos a mantener
+            keep_segments = []
+            current_pos = 0.0
+
+            for gap_start, gap_end in gaps:
+                keep_segments.append((current_pos, gap_start))
+                current_pos = gap_end
+
+            # Agregar segmento final
+            video_duration = get_audio_duration(output_video)
+            keep_segments.append((current_pos, video_duration))
+
+            print(f"{Colors.YELLOW}Segmentos a mantener: {len(keep_segments)}{Colors.NC}")
+
+            # Crear segmentos
+            segment_files = []
+            for idx, (start, end) in enumerate(keep_segments):
+                duration = end - start
+
+                if duration > 0.1:
+                    print(f"{Colors.YELLOW}  Extrayendo segmento {idx+1}: "
+                          f"{start:.1f}s a {end:.1f}s ({duration:.1f}s){Colors.NC}")
+
+                    seg_file = temp_dir / f"seg_{idx}.mkv"
+
+                    try:
+                        subprocess.run(
+                            ["ffmpeg", "-i", str(output_video),
+                             "-ss", str(start), "-t", str(duration),
+                             "-c", "copy", str(seg_file), "-y"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            check=True
+                        )
+
+                        if seg_file.exists() and seg_file.stat().st_size > 0:
+                            segment_files.append(seg_file)
+                            print(f"{Colors.GREEN}    ✓ Segmento creado{Colors.NC}")
+                        else:
+                            print(f"{Colors.RED}    ✗ Error: segmento vacío{Colors.NC}")
+
+                    except subprocess.CalledProcessError:
+                        print(f"{Colors.RED}    ✗ Error creando segmento{Colors.NC}")
+
+            # Concatenar segmentos
+            if segment_files:
+                print(f"{Colors.CYAN}{'═' * 50}{Colors.NC}")
+                print(f"{Colors.CYAN}Concatenando {len(segment_files)} segmentos...{Colors.NC}")
+
+                concat_list = temp_dir / "concat_breaks.txt"
+                with open(concat_list, 'w') as f:
+                    for seg in segment_files:
+                        f.write(f"file '{seg}'\n")
+
+                output_video_clean = video_path.with_suffix('').with_name(
+                    f"{video_path.stem}_clean_breaks.mkv"
+                )
+
+                try:
+                    subprocess.run(
+                        ["ffmpeg", "-f", "concat", "-safe", "0",
+                         "-i", str(concat_list), "-c", "copy",
+                         str(output_video_clean), "-y"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=True
+                    )
+
+                    if output_video_clean.exists() and output_video_clean.stat().st_size > 0:
+                        total_removed = sum(end - start for start, end in gaps)
+                        print(f"{Colors.GREEN}✓ Video sin pausas creado: {output_video_clean}{Colors.NC}")
+                        print(f"{Colors.GREEN}✓ Tiempo total eliminado: {total_removed:.1f}s "
+                              f"({total_removed/60:.1f} min){Colors.NC}")
+                    else:
+                        print(f"{Colors.RED}✗ Error: video vacío{Colors.NC}")
+
+                except subprocess.CalledProcessError:
+                    print(f"{Colors.RED}✗ Error concatenando segmentos{Colors.NC}")
+            else:
+                print(f"{Colors.RED}✗ No se crearon segmentos válidos{Colors.NC}")
+
+    # Resumen final
+    print(f"{Colors.GREEN}{'═' * 50}{Colors.NC}")
+    print(f"{Colors.CYAN}📄 ARCHIVOS GENERADOS{Colors.NC}")
+    print(f"{Colors.CYAN}{'═' * 50}{Colors.NC}")
+
+    if args.solo_audio:
+        print(f"{Colors.GREEN}✅ {output_audio_wav}{Colors.NC}")
+        if output_audio_aac and output_audio_aac.exists():
+            print(f"{Colors.GREEN}✅ {output_audio_aac}{Colors.NC}")
+    else:
+        if output_video:
+            print(f"{Colors.GREEN}✅ {output_video}{Colors.NC}")
+        if output_video_clean and output_video_clean.exists():
+            print(f"{Colors.GREEN}✅ {output_video_clean} {Colors.CYAN}(sin pausas largas){Colors.NC}")
+
+    print(f"{Colors.GREEN}✅ {working_srt}{Colors.NC}")
+    print(f"{Colors.GREEN}✅ {debug_srt}{Colors.NC}")
+
+    if args.test or args.only_remove_breaks:
+        print(f"{Colors.YELLOW}⚠️  Conservando: {temp_dir}{Colors.NC}")
+    else:
+        print(f"{Colors.YELLOW}Limpiando temporales...{Colors.NC}")
+        # shutil.rmtree(temp_dir)  # Descomentardescomentaryar cuando esté probado
+
+    print(f"{Colors.GREEN}¡Proceso completado!{Colors.NC}")
 
 if __name__ == "__main__":
     main()
