@@ -817,8 +817,9 @@ def main():
                          "-t", str(subtitle.duration),
                          "-c:v", "libx264", "-preset", "ultrafast", "-an",
                          str(seg_file), "-y"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
                         check=True
                     )
 
@@ -827,9 +828,15 @@ def main():
                         video_segments.append(seg_file)
                     else:
                         print(f"  {Colors.RED}✗ Error: segmento vacío{Colors.NC}")
+                        error_logger.add_warning(f"Subtítulo {subtitle.consecutive_id}: Segmento de video vacío")
                         continue
 
-                except subprocess.CalledProcessError:
+                except subprocess.CalledProcessError as e:
+                    error_logger.add_error(
+                        f"PASO 4: Extraer segmento de video (subtítulo {subtitle.consecutive_id})",
+                        ' '.join(e.cmd),
+                        e.stderr or "Error extrayendo segmento de video"
+                    )
                     print(f"  {Colors.RED}✗ Error creando segmento{Colors.NC}")
                     continue
 
@@ -846,8 +853,9 @@ def main():
                         subprocess.run(
                             ["ffmpeg", "-sseof", "-0.1", "-i", str(seg_file),
                              "-frames:v", "1", str(frame_file), "-y"],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True,
                             check=True
                         )
 
@@ -858,16 +866,23 @@ def main():
                                  "-t", str(freeze_dur), "-r", str(fps),
                                  "-pix_fmt", "yuv420p", "-c:v", "libx264",
                                  "-preset", "ultrafast", str(freeze_file), "-y"],
-                                stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                text=True,
                                 check=True
                             )
 
                             if freeze_file.exists() and freeze_file.stat().st_size > 0:
                                 video_segments.append(freeze_file)
+                                error_logger.add_warning(f"Subtítulo {subtitle.consecutive_id}: Freeze frame de {freeze_dur:.3f}s agregado")
                                 print(f"  {Colors.GREEN}✓ Freeze creado{Colors.NC}")
 
-                    except subprocess.CalledProcessError:
+                    except subprocess.CalledProcessError as e:
+                        error_logger.add_error(
+                            f"PASO 4: Crear freeze frame (subtítulo {subtitle.consecutive_id})",
+                            ' '.join(e.cmd),
+                            e.stderr or "Error creando freeze frame"
+                        )
                         print(f"  {Colors.YELLOW}⚠ Error creando freeze{Colors.NC}")
 
             # Concatenar segmentos
@@ -886,8 +901,9 @@ def main():
                         ["ffmpeg", "-f", "concat", "-safe", "0",
                          "-i", str(concat_list), "-c", "copy",
                          str(processed_video), "-y"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
                         check=True
                     )
 
@@ -895,10 +911,20 @@ def main():
                         video_to_use = processed_video
                         print(f"{Colors.GREEN}✓ Video procesado{Colors.NC}")
                     else:
+                        error_logger.add_error(
+                            "PASO 4: Concatenar segmentos de video",
+                            "ffmpeg concat",
+                            "Video concatenado está vacío"
+                        )
                         print(f"{Colors.RED}✗ Error: video vacío{Colors.NC}")
                         sys.exit(1)
 
-                except subprocess.CalledProcessError:
+                except subprocess.CalledProcessError as e:
+                    error_logger.add_error(
+                        "PASO 4: Concatenar segmentos de video",
+                        ' '.join(e.cmd),
+                        e.stderr or "Error concatenando segmentos de video"
+                    )
                     print(f"{Colors.RED}✗ Error concatenando{Colors.NC}")
                     sys.exit(1)
             else:
@@ -1180,8 +1206,9 @@ def main():
                             ["ffmpeg", "-i", str(output_video),
                              "-ss", str(start), "-t", str(duration),
                              "-c", "copy", str(seg_file), "-y"],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True,
                             check=True
                         )
 
@@ -1189,9 +1216,15 @@ def main():
                             segment_files.append(seg_file)
                             print(f"{Colors.GREEN}    ✓ Segmento creado{Colors.NC}")
                         else:
+                            error_logger.add_warning(f"PASO 7: Segmento {idx+1} está vacío")
                             print(f"{Colors.RED}    ✗ Error: segmento vacío{Colors.NC}")
 
-                    except subprocess.CalledProcessError:
+                    except subprocess.CalledProcessError as e:
+                        error_logger.add_error(
+                            f"PASO 7: Extraer segmento {idx+1} sin pausas",
+                            ' '.join(e.cmd),
+                            e.stderr or "Error extrayendo segmento"
+                        )
                         print(f"{Colors.RED}    ✗ Error creando segmento{Colors.NC}")
 
             # Concatenar segmentos
@@ -1213,8 +1246,9 @@ def main():
                         ["ffmpeg", "-f", "concat", "-safe", "0",
                          "-i", str(concat_list), "-c", "copy",
                          str(output_video_clean), "-y"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
                         check=True
                     )
 
@@ -1224,9 +1258,19 @@ def main():
                         print(f"{Colors.GREEN}✓ Tiempo total eliminado: {total_removed:.1f}s "
                               f"({total_removed/60:.1f} min){Colors.NC}")
                     else:
+                        error_logger.add_error(
+                            "PASO 7: Concatenar segmentos sin pausas",
+                            "ffmpeg concat",
+                            "Video concatenado está vacío"
+                        )
                         print(f"{Colors.RED}✗ Error: video vacío{Colors.NC}")
 
-                except subprocess.CalledProcessError:
+                except subprocess.CalledProcessError as e:
+                    error_logger.add_error(
+                        "PASO 7: Concatenar segmentos sin pausas",
+                        ' '.join(e.cmd),
+                        e.stderr or "Error concatenando segmentos"
+                    )
                     print(f"{Colors.RED}✗ Error concatenando segmentos{Colors.NC}")
             else:
                 print(f"{Colors.RED}✗ No se crearon segmentos válidos{Colors.NC}")
