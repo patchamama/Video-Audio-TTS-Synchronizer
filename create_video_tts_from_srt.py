@@ -781,6 +781,7 @@ def main():
     audio_master = temp_dir / "audio_master.wav"
     create_silence(0.001, audio_master)
     current_master_duration = 0.0
+    concat_counter = 0  # Contador para nombres únicos
 
     for idx, subtitle in enumerate(subtitles):
         segment = audio_segments.get(subtitle.consecutive_id)
@@ -802,8 +803,9 @@ def main():
             gap_file = temp_dir / f"gap_{subtitle.consecutive_id}.wav"
             create_silence(gap, gap_file)
 
-            # Concatenar
-            temp_master = temp_dir / "audio_master_temp.wav"
+            # Concatenar con nombre único
+            concat_counter += 1
+            temp_master = temp_dir / f"audio_concat_{concat_counter}.wav"
             subprocess.run(
                 ["ffmpeg", "-i", str(audio_master), "-i", str(gap_file),
                  "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[out]",
@@ -812,6 +814,9 @@ def main():
                 stderr=subprocess.DEVNULL,
                 check=True
             )
+            # Eliminar master anterior si no es el inicial
+            if audio_master != temp_dir / "audio_master.wav":
+                audio_master.unlink()
             audio_master = temp_master
             gap_file.unlink()
             current_master_duration = get_audio_duration(audio_master)
@@ -823,7 +828,8 @@ def main():
         if segment.was_truncated:
             print(f"  {Colors.MAGENTA}  (Audio truncado){Colors.NC}")
 
-        temp_master = temp_dir / "audio_master_temp2.wav"
+        concat_counter += 1
+        temp_master = temp_dir / f"audio_concat_{concat_counter}.wav"
         subprocess.run(
             ["ffmpeg", "-i", str(audio_master), "-i", str(segment.audio_file),
              "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[out]",
@@ -832,6 +838,9 @@ def main():
             stderr=subprocess.DEVNULL,
             check=True
         )
+        # Eliminar master anterior
+        if audio_master != temp_dir / "audio_master.wav":
+            audio_master.unlink()
         audio_master = temp_master
         current_master_duration = get_audio_duration(audio_master)
 
@@ -849,7 +858,8 @@ def main():
             padding_file = temp_dir / f"padding_{subtitle.consecutive_id}.wav"
             create_silence(padding, padding_file)
 
-            temp_master = temp_dir / "audio_master_temp3.wav"
+            concat_counter += 1
+            temp_master = temp_dir / f"audio_concat_{concat_counter}.wav"
             subprocess.run(
                 ["ffmpeg", "-i", str(audio_master), "-i", str(padding_file),
                  "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[out]",
@@ -858,6 +868,9 @@ def main():
                 stderr=subprocess.DEVNULL,
                 check=True
             )
+            # Eliminar master anterior
+            if audio_master != temp_dir / "audio_master.wav":
+                audio_master.unlink()
             audio_master = temp_master
             padding_file.unlink()
             current_master_duration = get_audio_duration(audio_master)
