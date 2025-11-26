@@ -95,6 +95,21 @@ srt_time_to_seconds() {
     echo "scale=3; $hours * 3600 + $minutes * 60 + $seconds + $milliseconds / 1000" | bc
 }
 
+# Normalizar número decimal para evitar formato .xxx (agregar 0 inicial)
+normalize_decimal() {
+    local num=$1
+    if [ -z "$num" ]; then
+        echo "0"
+        return
+    fi
+    # Si empieza con punto, agregar 0
+    if [[ "$num" =~ ^\. ]]; then
+        echo "0$num"
+    else
+        echo "$num"
+    fi
+}
+
 seconds_to_srt_time() {
     local total_seconds=$1
 
@@ -104,7 +119,7 @@ seconds_to_srt_time() {
     fi
 
     # Asegurar que el número esté en formato decimal limpio (forzar locale numérico)
-    total_seconds=$(LC_NUMERIC=C printf "%.3f" "$total_seconds")
+    total_seconds=$(LC_NUMERIC=C printf "%.3f" "$total_seconds" 2>/dev/null || echo "0")
 
     awk -v ts="$total_seconds" 'BEGIN {
         # Convertir a número para asegurar precisión
@@ -393,7 +408,7 @@ fi
 
 if [ "$DIRECT_BREAK_MODE" = false ]; then
     echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
-    echo -e "${BLUE}📋 PASO 1: PARSEAR SUBTÍTULOS${NC}"
+    echo -e "${BLUE}📋 PASO 1: PARSEAR Y VALIDAR SUBTÍTULOS${NC}"
     echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
 else
     echo -e "${BLUE}═══════════════════════════════════════════════════${NC}"
@@ -410,21 +425,82 @@ declare -a subtitle_ids
 declare -A subtitle_starts
 declare -A subtitle_ends
 declare -A subtitle_texts
+declare -A original_ids  # Mapeo de ID consecutivo -> ID original
+
+# Contador para IDs consecutivos
+consecutive_id=0
+has_errors=false
+validation_count=0
 
 while IFS= read -r line || [ -n "$line" ]; do
     if [[ $line =~ ^[0-9]+$ ]]; then
-        current_id=$line
+        # Limpiar espacios y caracteres extra del ID
+        current_id=$(echo "$line" | tr -d '[:space:]')
         reading_text=false
     elif [[ $line =~ ^[0-9]{2}:[0-9]{2}:[0-9]{2},[0-9]{3}\ --\>\ [0-9]{2}:[0-9]{2}:[0-9]{2},[0-9]{3} ]]; then
-        IFS=' --> ' read -r start_time end_time <<< "$line"
+        # Extraer tiempos usando regex para evitar problemas con IFS
+        start_time=$(echo "$line" | sed -E 's/^([0-9]{2}:[0-9]{2}:[0-9]{2},[0-9]{3}).*$/\1/' | tr -d '[:space:]')
+        end_time=$(echo "$line" | sed -E 's/^.*--> ([0-9]{2}:[0-9]{2}:[0-9]{2},[0-9]{3})$/\1/' | tr -d '[:space:]')
+
+        # Validar que tiempo final >= tiempo inicial
+        start_seconds_check=$(srt_time_to_seconds "$start_time")
+        end_seconds_check=$(srt_time_to_seconds "$end_time")
+
+        if [ -n "$start_seconds_check" ] && [ -n "$end_seconds_check" ]; then
+            duration_check=$(echo "$end_seconds_check - $start_seconds_check" | bc -l)
+
+            if (( $(echo "$duration_check < 0" | bc -l) )); then
+                echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+                echo -e "${RED}✗ ERROR: Subtítulo con tiempo final < tiempo inicial${NC}"
+                echo -e "${YELLOW}  ID original: $current_id${NC}"
+                echo -e "${YELLOW}  Inicio: $start_time ($start_seconds_check s)${NC}"
+                echo -e "${YELLOW}  Fin: $end_time ($end_seconds_check s)${NC}"
+                echo -e "${YELLOW}  Duración: ${duration_check}s (NEGATIVA)${NC}"
+                echo -e "${CYAN}  Por favor, corrige este subtítulo en el archivo SRT${NC}"
+                echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+                has_errors=true
+                current_id=""
+                reading_text=false
+                continue
+            fi
+        fi
+
+        # Guardar timestamps temporalmente con el ID original
         subtitle_starts[$current_id]=$start_time
         subtitle_ends[$current_id]=$end_time
         reading_text=true
         current_text=""
     elif [ -z "$line" ] && [ -n "$current_id" ]; then
         if [ -n "$current_text" ]; then
-            subtitle_ids+=("$current_id")
-            subtitle_texts[$current_id]=$current_text
+            # Incrementar ID consecutivo
+            consecutive_id=$((consecutive_id + 1))
+
+            # Verificar que los timestamps existan
+            if [ -z "${subtitle_starts[$current_id]}" ] || [ -z "${subtitle_ends[$current_id]}" ]; then
+                echo -e "${RED}ERROR INTERNO: Timestamps vacíos para ID $current_id${NC}" >&2
+                echo -e "${YELLOW}  Esto indica un bug en el parser${NC}" >&2
+                current_id=""
+                current_text=""
+                reading_text=false
+                continue
+            fi
+
+            # Guardar con ID consecutivo
+            subtitle_ids+=("$consecutive_id")
+            subtitle_texts[$consecutive_id]=$current_text
+            subtitle_starts[$consecutive_id]=${subtitle_starts[$current_id]}
+            subtitle_ends[$consecutive_id]=${subtitle_ends[$current_id]}
+            original_ids[$consecutive_id]=$current_id
+
+            # Limpiar datos temporales del ID original
+            unset subtitle_starts[$current_id]
+            unset subtitle_ends[$current_id]
+
+            # Mostrar progreso cada 100 subtítulos
+            validation_count=$((validation_count + 1))
+            if [ $((validation_count % 100)) -eq 0 ]; then
+                echo -n "."
+            fi
         fi
         current_id=""
         current_text=""
@@ -438,12 +514,64 @@ while IFS= read -r line || [ -n "$line" ]; do
     fi
 done < "$SRT_FILE"
 
+# Procesar último subtítulo si existe
 if [ -n "$current_id" ] && [ -n "$current_text" ]; then
-    subtitle_ids+=("$current_id")
-    subtitle_texts[$current_id]=$current_text
+    # Validar último subtítulo
+    start_time="${subtitle_starts[$current_id]}"
+    end_time="${subtitle_ends[$current_id]}"
+
+    if [ -n "$start_time" ] && [ -n "$end_time" ]; then
+        start_seconds_check=$(srt_time_to_seconds "$start_time")
+        end_seconds_check=$(srt_time_to_seconds "$end_time")
+        duration_check=$(echo "$end_seconds_check - $start_seconds_check" | bc -l)
+
+        if (( $(echo "$duration_check >= 0" | bc -l) )); then
+            consecutive_id=$((consecutive_id + 1))
+            subtitle_ids+=("$consecutive_id")
+            subtitle_texts[$consecutive_id]=$current_text
+            subtitle_starts[$consecutive_id]=${subtitle_starts[$current_id]}
+            subtitle_ends[$consecutive_id]=${subtitle_ends[$current_id]}
+            original_ids[$consecutive_id]=$current_id
+
+            # Mostrar progreso cada 100 subtítulos
+            validation_count=$((validation_count + 1))
+            if [ $((validation_count % 100)) -eq 0 ]; then
+                echo -n "."
+            fi
+        fi
+    fi
 fi
 
-echo -e "${GREEN}Total: ${#subtitle_ids[@]} subtítulos${NC}"
+# Nueva línea después de los puntos de progreso
+if [ $validation_count -gt 0 ]; then
+    echo ""
+fi
+
+if [ "$has_errors" = true ]; then
+    echo -e "${RED}═══════════════════════════════════════════════════${NC}"
+    echo -e "${RED}Se encontraron subtítulos con errores${NC}"
+    echo -e "${RED}Por favor, corrige los subtítulos marcados arriba${NC}"
+    echo -e "${RED}═══════════════════════════════════════════════════${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}Total subtítulos válidos: ${#subtitle_ids[@]}${NC}"
+
+# Generar SRT de trabajo con IDs consecutivos
+if [ "$DIRECT_BREAK_MODE" = false ]; then
+    WORKING_SRT="${VIDEO_NAME%.*}_working.srt"
+    > "$WORKING_SRT"
+
+    for id in "${subtitle_ids[@]}"; do
+        echo "$id" >> "$WORKING_SRT"
+        echo "${subtitle_starts[$id]} --> ${subtitle_ends[$id]}" >> "$WORKING_SRT"
+        echo "${subtitle_texts[$id]}" >> "$WORKING_SRT"
+        echo "" >> "$WORKING_SRT"
+    done
+
+    echo -e "${GREEN}✅ SRT de trabajo generado: $WORKING_SRT${NC}"
+    echo -e "${CYAN}   (IDs renumerados: 1-${#subtitle_ids[@]})${NC}"
+fi
 
 if [ "$TEST_MODE" = true ] && [ ${#subtitle_ids[@]} -gt $TEST_LIMIT ]; then
     echo -e "${YELLOW}Limitando a ${TEST_LIMIT} subtítulos${NC}"
@@ -491,7 +619,8 @@ if [ "$SKIP_TTS" = false ]; then
         start_seconds=$(srt_time_to_seconds "$start_time")
         end_seconds=$(srt_time_to_seconds "$end_time")
         subtitle_duration=$(echo "$end_seconds - $start_seconds" | bc -l)
-        
+        subtitle_duration=$(normalize_decimal "$subtitle_duration")
+
         # Calcular tiempo disponible
         next_idx=$((idx + 1))
         if [ $next_idx -lt ${#subtitle_ids[@]} ]; then
@@ -499,12 +628,17 @@ if [ "$SKIP_TTS" = false ]; then
             next_start_time="${subtitle_starts[$next_id]}"
             next_start_seconds=$(srt_time_to_seconds "$next_start_time")
             available_time=$(echo "$next_start_seconds - $start_seconds" | bc -l)
+            available_time=$(normalize_decimal "$available_time")
         else
             available_time=$subtitle_duration
         fi
         
         echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        echo -e "${YELLOW}Subtítulo $id${NC}"
+        if [ -n "${original_ids[$id]}" ]; then
+            echo -e "${YELLOW}Subtítulo $id ${CYAN}(ID original: ${original_ids[$id]})${NC}"
+        else
+            echo -e "${YELLOW}Subtítulo $id${NC}"
+        fi
         echo -e "${YELLOW}  Texto: ${text:0:50}...${NC}"
         echo -e "${BLUE}  Duración subtítulo: ${subtitle_duration}s${NC}"
         echo -e "${BLUE}  Tiempo disponible: ${available_time}s${NC}"
@@ -1253,6 +1387,9 @@ else
         fi
     fi
     echo -e "${GREEN}✅ $DEBUG_SRT${NC}"
+    if [ -n "$WORKING_SRT" ] && [ -f "$WORKING_SRT" ]; then
+        echo -e "${GREEN}✅ $WORKING_SRT ${CYAN}(IDs renumerados)${NC}"
+    fi
 fi
 
 if [ "$TEST_MODE" = true ] || [ "$DIRECT_BREAK_MODE" = true ] || [ "$ONLY_REMOVE_BREAKS" = true ]; then
