@@ -53,3 +53,6 @@ temp_breaks_*/
 test.srt
 test_video.mp4
 test_video.mkv
+test_*.wav
+ejemplo_*.wav
+test_output.*

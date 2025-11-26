@@ -172,12 +172,6 @@ class TTSEngine:
 
     def __init__(self):
         self.method = self._detect_method()
-        self.python_tts_script = None
-        if self.method == "python":
-            script_dir = Path(__file__).parent
-            self.python_tts_script = script_dir / "generate_tts.py"
-            if not self.python_tts_script.exists():
-                raise FileNotFoundError(f"No se encuentra {self.python_tts_script}")
 
     def _detect_method(self) -> str:
         """Detecta el método TTS disponible"""
@@ -186,19 +180,45 @@ class TTSEngine:
                 print(f"{Colors.GREEN}✓ Sistema: macOS - Usando comando 'say'{Colors.NC}")
                 return "say"
 
-        if shutil.which("python3"):
-            try:
-                import gtts
-                import pydub
-                print(f"{Colors.GREEN}✓ Sistema: Linux/Otro - Usando Python + gTTS{Colors.NC}")
-                return "python"
-            except ImportError:
-                print(f"{Colors.RED}✗ Error: Faltan dependencias de Python{Colors.NC}")
-                print(f"{Colors.YELLOW}Instala con: sudo apt install python3-gtts python3-pydub{Colors.NC}")
-                sys.exit(1)
+        # Intentar usar gTTS para Linux/otros
+        try:
+            import gtts
+            from pydub import AudioSegment
+            print(f"{Colors.GREEN}✓ Sistema: Linux/Otro - Usando Python + gTTS (con fallback a espeak-ng){Colors.NC}")
+            return "python"
+        except ImportError:
+            print(f"{Colors.RED}✗ Error: Faltan dependencias de Python{Colors.NC}")
+            print(f"{Colors.YELLOW}Instala con: sudo apt install python3-gtts python3-pydub{Colors.NC}")
+            sys.exit(1)
 
-        print(f"{Colors.RED}✗ Error: No se encontró método TTS compatible{Colors.NC}")
-        sys.exit(1)
+    def _generate_with_espeak(self, text: str, rate: int, output_file: Path) -> bool:
+        """Genera audio usando espeak-ng (offline fallback)"""
+        try:
+            # Verificar que espeak-ng está instalado
+            if not shutil.which("espeak-ng"):
+                return False
+
+            cmd = [
+                'espeak-ng',
+                '-v', 'es',              # Voz en español
+                '-s', str(rate),         # Velocidad en WPM
+                '-w', str(output_file),  # Archivo de salida WAV
+                text                     # Texto a convertir
+            ]
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+
+            return output_file.exists()
+
+        except subprocess.CalledProcessError as e:
+            return False
+        except Exception as e:
+            return False
 
     def generate_audio(self, text: str, rate: int, output_file: Path) -> bool:
         """Genera audio TTS con el rate especificado"""
@@ -221,17 +241,96 @@ class TTSEngine:
                 return True
 
             elif self.method == "python":
-                # Python gTTS
-                subprocess.run(
-                    ["python3", str(self.python_tts_script), text, str(output_file),
-                     "-r", str(rate), "-l", "es"],
-                    check=True,
-                    stderr=subprocess.DEVNULL
-                )
-                return output_file.exists()
+                # Python gTTS integrado con reintentos
+                from gtts import gTTS
+                from pydub import AudioSegment
+                from pydub.effects import speedup
+                import time
 
-        except subprocess.CalledProcessError as e:
-            print(f"{Colors.RED}Error: TTS falló para rate {rate}{Colors.NC}", file=sys.stderr)
+                # Reintentar hasta 3 veces con backoff exponencial
+                max_retries = 3
+                retry_delay = 1.0
+
+                for attempt in range(max_retries):
+                    try:
+                        # Generar audio con gTTS
+                        tts = gTTS(text=text, lang='es', slow=False)
+                        temp_mp3 = output_file.with_suffix('.mp3')
+                        tts.save(str(temp_mp3))
+
+                        # Cargar audio con pydub
+                        audio = AudioSegment.from_mp3(str(temp_mp3))
+
+                        # Ajustar velocidad según rate
+                        # gTTS genera a ~150 WPM, ajustamos según el rate deseado
+                        speed_factor = rate / 150.0
+
+                        if speed_factor != 1.0:
+                            # Ajustar velocidad sin cambiar el pitch
+                            if speed_factor > 1.0:
+                                audio = speedup(audio, playback_speed=speed_factor)
+                            else:
+                                # Para velocidades más lentas, usar frame_rate
+                                audio = audio._spawn(audio.raw_data, overrides={
+                                    "frame_rate": int(audio.frame_rate * speed_factor)
+                                })
+                                audio = audio.set_frame_rate(44100)
+
+                        # Exportar a WAV
+                        audio.export(str(output_file), format='wav')
+
+                        # Limpiar archivo temporal
+                        if temp_mp3.exists():
+                            temp_mp3.unlink()
+
+                        return output_file.exists()
+
+                    except Exception as e:
+                        error_msg = str(e)
+
+                        # Detectar tipo de error
+                        if "Failed to connect" in error_msg or "Connection" in error_msg:
+                            if attempt < max_retries - 1:
+                                print(f"{Colors.YELLOW}  ⚠ Error de conexión (intento {attempt + 1}/{max_retries}). Reintentando en {retry_delay:.1f}s...{Colors.NC}")
+                                time.sleep(retry_delay)
+                                retry_delay *= 2  # Backoff exponencial
+                                continue
+                            else:
+                                print(f"{Colors.RED}  ✗ gTTS falló después de {max_retries} intentos{Colors.NC}")
+                                print(f"{Colors.CYAN}  🔄 Intentando con espeak-ng (TTS offline)...{Colors.NC}")
+                                # Intentar con espeak-ng como fallback
+                                if self._generate_with_espeak(text, rate, output_file):
+                                    print(f"{Colors.GREEN}  ✓ Audio generado con espeak-ng{Colors.NC}")
+                                    return True
+                                else:
+                                    print(f"{Colors.RED}  ✗ espeak-ng no está disponible{Colors.NC}")
+                                    print(f"{Colors.YELLOW}  Instala con: sudo apt-get install espeak-ng{Colors.NC}")
+                                    return False
+                        else:
+                            # Otro tipo de error
+                            print(f"{Colors.RED}  ✗ Error generando TTS: {error_msg}{Colors.NC}")
+                            if attempt < max_retries - 1:
+                                time.sleep(retry_delay)
+                                retry_delay *= 2
+                                continue
+                            else:
+                                # Intentar con espeak-ng como fallback
+                                print(f"{Colors.CYAN}  🔄 Intentando con espeak-ng (TTS offline)...{Colors.NC}")
+                                if self._generate_with_espeak(text, rate, output_file):
+                                    print(f"{Colors.GREEN}  ✓ Audio generado con espeak-ng{Colors.NC}")
+                                    return True
+                                else:
+                                    return False
+
+                # Si llegamos aquí, intentar con espeak-ng
+                print(f"{Colors.CYAN}  🔄 Intentando con espeak-ng (TTS offline)...{Colors.NC}")
+                if self._generate_with_espeak(text, rate, output_file):
+                    print(f"{Colors.GREEN}  ✓ Audio generado con espeak-ng{Colors.NC}")
+                    return True
+                return False
+
+        except Exception as e:
+            print(f"{Colors.RED}Error: TTS falló para rate {rate}: {e}{Colors.NC}", file=sys.stderr)
             return False
 
         return False
@@ -456,12 +555,277 @@ def truncate_audio(input_file: Path, output_file: Path, duration: float, error_l
             error_logger.add_error("Truncar audio", ' '.join(e.cmd), e.stderr or "Error truncando audio")
         return False
 
+def get_config_file() -> Path:
+    """Obtiene la ruta al archivo de configuración"""
+    home = Path.home()
+    return home / ".video_tts_config.json"
+
+def load_last_config() -> dict:
+    """Carga la última configuración usada"""
+    config_file = get_config_file()
+    if config_file.exists():
+        try:
+            import json
+            with open(config_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+def save_config(srt_file: str, video: str, test: Optional[int], solo_audio: bool,
+                no_freeze: bool, remove_breaks: bool):
+    """Guarda la configuración actual para futuras ejecuciones"""
+    config_file = get_config_file()
+    try:
+        import json
+        config = {
+            'srt_file': srt_file,
+            'video': video,
+            'test': test,
+            'solo_audio': solo_audio,
+            'no_freeze': no_freeze,
+            'remove_breaks': remove_breaks
+        }
+        with open(config_file, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2)
+    except Exception:
+        pass  # No es crítico si falla guardar
+
+def suggest_video_from_srt(srt_file: str) -> Optional[str]:
+    """Sugiere un archivo de video basado en el nombre del SRT"""
+    if not srt_file:
+        return None
+
+    srt_path = Path(srt_file)
+    base_name = srt_path.stem
+
+    # Buscar video con el mismo nombre base
+    for ext in ['.mp4', '.mkv', '.avi', '.mov', '.webm']:
+        video_path = srt_path.parent / f"{base_name}{ext}"
+        if video_path.exists():
+            return str(video_path)
+
+    # Si no existe, sugerir el nombre con .mp4
+    return str(srt_path.parent / f"{base_name}.mp4")
+
+def show_usage_and_prompt():
+    """Muestra ejemplos de uso y ofrece modo interactivo"""
+    print(f"{Colors.CYAN}{'═' * 60}{Colors.NC}")
+    print(f"{Colors.CYAN}Video-Audio-TTS Synchronizer{Colors.NC}")
+    print(f"{Colors.CYAN}{'═' * 60}{Colors.NC}")
+    print()
+    print(f"{Colors.YELLOW}USO:{Colors.NC}")
+    print(f"  python3 create_video_tts_from_srt.py <archivo.srt> <video.mp4> [opciones]")
+    print()
+    print(f"{Colors.YELLOW}EJEMPLOS:{Colors.NC}")
+    print(f"  {Colors.GREEN}# Procesar video completo{Colors.NC}")
+    print(f"  python3 create_video_tts_from_srt.py mi_video.srt mi_video.mp4")
+    print()
+    print(f"  {Colors.GREEN}# Modo test (solo 50 subtítulos){Colors.NC}")
+    print(f"  python3 create_video_tts_from_srt.py mi_video.srt mi_video.mp4 --test 50")
+    print()
+    print(f"  {Colors.GREEN}# Solo generar audio, sin video{Colors.NC}")
+    print(f"  python3 create_video_tts_from_srt.py mi_video.srt mi_video.mp4 --solo-audio")
+    print()
+    print(f"  {Colors.GREEN}# Eliminar pausas largas del video{Colors.NC}")
+    print(f"  python3 create_video_tts_from_srt.py mi_video.srt mi_video.mp4 --remove-breaks")
+    print()
+    print(f"{Colors.CYAN}{'─' * 60}{Colors.NC}")
+
+    # Preguntar si desea modo interactivo
+    try:
+        response = input(f"\n¿Desea usar el {Colors.GREEN}modo interactivo{Colors.NC}? (s/N): ").strip().lower()
+        if response in ['s', 'si', 'sí', 'y', 'yes']:
+            return interactive_prompt()
+    except (KeyboardInterrupt, EOFError):
+        print(f"\n{Colors.YELLOW}Operación cancelada{Colors.NC}")
+        sys.exit(0)
+
+    return None
+
+def interactive_prompt():
+    """Modo interactivo para obtener parámetros del usuario"""
+    print(f"\n{Colors.BLUE}{'═' * 60}{Colors.NC}")
+    print(f"{Colors.BLUE}MODO INTERACTIVO{Colors.NC}")
+    print(f"{Colors.BLUE}{'═' * 60}{Colors.NC}\n")
+
+    # Cargar última configuración
+    last_config = load_last_config()
+    if last_config:
+        print(f"{Colors.CYAN}💾 Última configuración cargada{Colors.NC}\n")
+
+    try:
+        # Archivo SRT
+        print(f"{Colors.YELLOW}1. Archivo de subtítulos (SRT){Colors.NC}")
+        print(f"   {Colors.CYAN}Ruta al archivo .srt con los subtítulos del video{Colors.NC}")
+
+        default_srt = last_config.get('srt_file', '')
+        if default_srt:
+            prompt = f"   → Archivo SRT [{Colors.GREEN}{default_srt}{Colors.NC}]: "
+        else:
+            prompt = f"   → Archivo SRT: "
+
+        srt_file = input(prompt).strip()
+        if not srt_file:
+            if default_srt:
+                srt_file = default_srt
+                print(f"   {Colors.CYAN}Usando: {srt_file}{Colors.NC}")
+            else:
+                print(f"{Colors.RED}Error: Debe especificar un archivo SRT{Colors.NC}")
+                sys.exit(1)
+
+        # Archivo de video (sugerir basado en SRT)
+        print(f"\n{Colors.YELLOW}2. Archivo de video{Colors.NC}")
+        print(f"   {Colors.CYAN}Ruta al archivo de video (.mp4, .mkv, etc.){Colors.NC}")
+
+        # Si el SRT cambió, sugerir video con el mismo nombre
+        suggested_video = suggest_video_from_srt(srt_file)
+        default_video = suggested_video if suggested_video else last_config.get('video', '')
+
+        if default_video:
+            exists_marker = "✓" if Path(default_video).exists() else "?"
+            prompt = f"   → Archivo video [{Colors.GREEN}{exists_marker} {default_video}{Colors.NC}]: "
+        else:
+            prompt = f"   → Archivo video: "
+
+        video = input(prompt).strip()
+        if not video:
+            if default_video:
+                video = default_video
+                print(f"   {Colors.CYAN}Usando: {video}{Colors.NC}")
+            else:
+                print(f"{Colors.RED}Error: Debe especificar un archivo de video{Colors.NC}")
+                sys.exit(1)
+
+        # Modo test
+        print(f"\n{Colors.YELLOW}3. Modo test (opcional){Colors.NC}")
+        print(f"   {Colors.CYAN}Procesar solo N subtítulos para pruebas rápidas{Colors.NC}")
+
+        default_test = last_config.get('test')
+        if default_test:
+            test_prompt = f"   → ¿Activar modo test? [{Colors.GREEN}s, {default_test} subtítulos{Colors.NC}/N]: "
+        else:
+            test_prompt = f"   → ¿Activar modo test? (s/N): "
+
+        test_input = input(test_prompt).strip().lower()
+        test_value = None
+
+        if test_input in ['s', 'si', 'sí', 'y', 'yes']:
+            if default_test:
+                num_prompt = f"   → ¿Cuántos subtítulos? [{Colors.GREEN}{default_test}{Colors.NC}]: "
+            else:
+                num_prompt = f"   → ¿Cuántos subtítulos? (default: 30): "
+            test_num = input(num_prompt).strip()
+
+            if not test_num and default_test:
+                test_value = default_test
+            else:
+                test_value = int(test_num) if test_num else 30
+        elif not test_input and default_test:
+            # Si presiona Enter y había un default, usarlo
+            test_value = default_test
+            print(f"   {Colors.CYAN}Usando: modo test con {test_value} subtítulos{Colors.NC}")
+
+        # Solo audio
+        print(f"\n{Colors.YELLOW}4. Solo audio (opcional){Colors.NC}")
+        print(f"   {Colors.CYAN}Generar únicamente el audio TTS, sin procesar video{Colors.NC}")
+
+        default_solo = last_config.get('solo_audio', False)
+        if default_solo:
+            solo_prompt = f"   → ¿Solo generar audio? [{Colors.GREEN}S{Colors.NC}/n]: "
+        else:
+            solo_prompt = f"   → ¿Solo generar audio? (s/N): "
+
+        solo_input = input(solo_prompt).strip().lower()
+        if solo_input:
+            solo_audio = solo_input in ['s', 'si', 'sí', 'y', 'yes']
+        else:
+            solo_audio = default_solo
+
+        # No freeze
+        print(f"\n{Colors.YELLOW}5. Manejo de audios largos{Colors.NC}")
+        print(f"   {Colors.CYAN}Cuando el audio TTS es más largo que el subtítulo:{Colors.NC}")
+        print(f"   {Colors.GREEN}  - Freeze (default): Congela el último frame del video{Colors.NC}")
+        print(f"   {Colors.YELLOW}  - Truncar: Corta el audio al tiempo disponible{Colors.NC}")
+
+        default_nofreeze = last_config.get('no_freeze', False)
+        if default_nofreeze:
+            freeze_prompt = f"   → ¿Truncar audios largos? [{Colors.GREEN}S{Colors.NC}/n]: "
+        else:
+            freeze_prompt = f"   → ¿Truncar audios largos? (s/N): "
+
+        freeze_input = input(freeze_prompt).strip().lower()
+        if freeze_input:
+            no_freeze = freeze_input in ['s', 'si', 'sí', 'y', 'yes']
+        else:
+            no_freeze = default_nofreeze
+
+        # Eliminar pausas
+        print(f"\n{Colors.YELLOW}6. Eliminar pausas largas (opcional){Colors.NC}")
+        print(f"   {Colors.CYAN}Remover pausas mayores a 15 minutos del video final{Colors.NC}")
+
+        default_breaks = last_config.get('remove_breaks', False)
+        if default_breaks:
+            breaks_prompt = f"   → ¿Eliminar pausas largas? [{Colors.GREEN}S{Colors.NC}/n]: "
+        else:
+            breaks_prompt = f"   → ¿Eliminar pausas largas? (s/N): "
+
+        breaks_input = input(breaks_prompt).strip().lower()
+        if breaks_input:
+            remove_breaks = breaks_input in ['s', 'si', 'sí', 'y', 'yes']
+        else:
+            remove_breaks = default_breaks
+
+        # Construir lista de argumentos
+        args_list = [srt_file, video]
+        if test_value:
+            args_list.extend(['--test', str(test_value)])
+        if solo_audio:
+            args_list.append('--solo-audio')
+        if no_freeze:
+            args_list.append('--no-freeze')
+        if remove_breaks:
+            args_list.append('--remove-breaks')
+
+        # Mostrar resumen
+        print(f"\n{Colors.CYAN}{'═' * 60}{Colors.NC}")
+        print(f"{Colors.CYAN}CONFIGURACIÓN:{Colors.NC}")
+        print(f"  SRT: {srt_file}")
+        print(f"  Video: {video}")
+        if test_value:
+            print(f"  Modo test: {test_value} subtítulos")
+        if solo_audio:
+            print(f"  Solo audio: Sí")
+        if no_freeze:
+            print(f"  Truncar audios: Sí")
+        if remove_breaks:
+            print(f"  Eliminar pausas: Sí")
+        print(f"{Colors.CYAN}{'═' * 60}{Colors.NC}")
+
+        confirm = input(f"\n¿Continuar con esta configuración? (S/n): ").strip().lower()
+        if confirm in ['n', 'no']:
+            print(f"{Colors.YELLOW}Operación cancelada{Colors.NC}")
+            sys.exit(0)
+
+        # Guardar configuración para futuras ejecuciones
+        save_config(srt_file, video, test_value, solo_audio, no_freeze, remove_breaks)
+
+        return args_list
+
+    except (KeyboardInterrupt, EOFError):
+        print(f"\n{Colors.YELLOW}Operación cancelada{Colors.NC}")
+        sys.exit(0)
+    except Exception as e:
+        print(f"{Colors.RED}Error: {e}{Colors.NC}")
+        sys.exit(1)
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Genera audio TTS sincronizado con video desde archivo SRT"
+        description="Genera audio TTS sincronizado con video desde archivo SRT",
+        add_help=False  # Manejamos --help manualmente
     )
-    parser.add_argument("srt_file", help="Archivo de subtítulos SRT")
-    parser.add_argument("video", help="Archivo de video")
+    parser.add_argument("srt_file", nargs="?", help="Archivo de subtítulos SRT")
+    parser.add_argument("video", nargs="?", help="Archivo de video")
     parser.add_argument("audio_dir", nargs="?", help="Carpeta con audios ya generados")
     parser.add_argument("--test", type=int, nargs="?", const=30,
                        help="Modo test: procesar N subtítulos (default: 30)")
@@ -473,8 +837,24 @@ def main():
                        help="Eliminar pausas >15min del video final")
     parser.add_argument("--only-remove-breaks", action="store_true",
                        help="SOLO eliminar pausas del video (sin TTS)")
+    parser.add_argument("-h", "--help", action="store_true",
+                       help="Mostrar ayuda")
 
     args = parser.parse_args()
+
+    # Si se pide ayuda o no hay parámetros, mostrar uso y prompt
+    if args.help or (not args.srt_file and not args.video):
+        interactive_args = show_usage_and_prompt()
+        if interactive_args:
+            # Re-parsear con los argumentos interactivos
+            args = parser.parse_args(interactive_args)
+        else:
+            sys.exit(0)
+
+    # Validar que se proporcionaron los argumentos requeridos
+    if not args.srt_file or not args.video:
+        print(f"{Colors.RED}Error: Se requieren los parámetros srt_file y video{Colors.NC}")
+        sys.exit(1)
 
     # Inicializar logger de errores
     error_logger = ErrorLogger()
@@ -517,6 +897,16 @@ def main():
         print(f"{Colors.MAGENTA}✂️  MODO REMOVE-BREAKS: Se eliminarán pausas >15min{Colors.NC}")
     if args.only_remove_breaks:
         print(f"{Colors.MAGENTA}✂️  MODO ONLY-REMOVE-BREAKS: SOLO se eliminarán pausas{Colors.NC}")
+
+    # Guardar configuración para futuras ejecuciones
+    save_config(
+        str(srt_path),
+        str(video_path),
+        args.test,
+        args.solo_audio,
+        args.no_freeze,
+        args.remove_breaks
+    )
 
     # Parsear SRT
     print(f"{Colors.BLUE}{'═' * 50}{Colors.NC}")

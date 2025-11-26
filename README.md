@@ -13,6 +13,7 @@ Sistema inteligente de sincronización de audio TTS (Text-to-Speech) con video a
 - [Diagrama de Flujo](#-diagrama-de-flujo)
 - [Archivos Generados](#-archivos-generados)
 - [Pendientes y Roadmap](#-pendientes-y-roadmap)
+- [Solución de Problemas](#-solución-de-problemas)
 
 ## 🎯 Descripción
 
@@ -69,27 +70,35 @@ sudo apt install python3-gtts python3-pydub
 
 ## 🚀 Instalación
 
-### Opción 1: Descarga Directa (Recomendado para uso rápido)
+### Opción 1: One-Liner (¡Más rápido!)
+
+**Todo en una sola línea:**
+```bash
+wget -q https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/main/create_video_tts_from_srt.py && chmod +x create_video_tts_from_srt.py && sudo apt-get install -y ffmpeg python3 python3-gtts python3-pydub && python3 create_video_tts_from_srt.py
+```
+
+Esto descarga el script, instala dependencias y lo ejecuta en modo interactivo.
+
+### Opción 2: Descarga Directa Paso a Paso
 
 ```bash
-# Descargar solo el script Python
+# Descargar el script Python
 wget https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/main/create_video_tts_from_srt.py
 
-# Descargar también el script auxiliar para gTTS (Linux)
-wget https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/main/generate_tts.py
-
-# Instalar dependencias (Linux)
-sudo apt-get install ffmpeg python3
-sudo apt install python3-gtts python3-pydub
+# Instalar dependencias (Linux/Ubuntu)
+sudo apt-get install ffmpeg python3 python3-gtts python3-pydub
 
 # Dar permisos de ejecución
 chmod +x create_video_tts_from_srt.py
 
-# Ejecutar
+# Ejecutar (modo interactivo si no se dan parámetros)
+python3 create_video_tts_from_srt.py
+
+# O ejecutar con parámetros directamente
 python3 create_video_tts_from_srt.py mi_video.srt mi_video.mp4
 ```
 
-### Opción 2: Clonar Repositorio Completo
+### Opción 3: Clonar Repositorio Completo
 
 ```bash
 # Clonar el repositorio
@@ -108,7 +117,23 @@ chmod +x create_video_tts_from_srt.py
 
 ## 💻 Uso
 
-### Sintaxis Básica
+### Modo Interactivo (Recomendado para principiantes)
+
+Si ejecutas el script sin parámetros, inicia el modo interactivo:
+
+```bash
+python3 create_video_tts_from_srt.py
+```
+
+El script te guiará paso a paso preguntando:
+- 📄 Archivo de subtítulos (SRT)
+- 🎥 Archivo de video
+- 🧪 ¿Activar modo test?
+- 🎵 ¿Solo generar audio?
+- ⏩ ¿Truncar audios largos o usar freeze?
+- ✂️ ¿Eliminar pausas largas?
+
+### Sintaxis Básica (Modo Comando)
 
 ```bash
 python3 create_video_tts_from_srt.py <archivo.srt> <video.mp4> [opciones]
@@ -908,6 +933,76 @@ API REST para procesar videos en servidores remotos.
 - Celery para workers
 - Redis para cola de tareas
 - S3 para almacenamiento
+
+## 🔧 Solución de Problemas
+
+### Test de Diagnóstico gTTS
+
+Si encuentras errores de conexión con gTTS ("Failed to connect"), usa el script de diagnóstico:
+
+```bash
+python3 test_gtts.py
+```
+
+**¿Qué hace?**
+- Verifica la conexión a Google TTS
+- Genera audio de prueba en español
+- Convierte MP3 a WAV
+- Valida la calidad del audio generado
+
+**Resultados posibles:**
+
+✅ **Test exitoso**: gTTS funciona correctamente. Si el script principal falla, revisa los parámetros.
+
+❌ **Error de conexión**: Indica problemas de red. Posibles causas:
+- Sin conexión a internet
+- Firewall bloqueando acceso a Google TTS
+- Proxy o VPN interfiriendo
+- Google TTS temporalmente no disponible
+
+**Solución:**
+1. Verifica tu conexión a internet
+2. Intenta desactivar temporalmente firewall/proxy
+3. Espera unos minutos y reintenta (el script tiene reintentos automáticos)
+
+### Errores Comunes
+
+#### "No module named 'gtts'"
+
+**Solución:**
+```bash
+# Linux/Ubuntu
+sudo apt install python3-gtts python3-pydub
+
+# O con pip
+pip3 install gtts pydub
+```
+
+#### "Couldn't find ffmpeg"
+
+**Solución:**
+```bash
+# Linux/Ubuntu
+sudo apt-get install ffmpeg
+
+# macOS
+brew install ffmpeg
+```
+
+#### "Timestamps are unset in a packet"
+
+Este error ha sido corregido en versiones recientes. Si persiste:
+```bash
+# Actualiza el script a la última versión
+wget https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/main/create_video_tts_from_srt.py
+```
+
+#### El audio TTS no se sincroniza correctamente
+
+**Verifica:**
+1. Los timestamps en el SRT están correctamente formateados
+2. No hay timestamps negativos (el script mostrará advertencias)
+3. Usa `--test 10` para probar con pocos subtítulos primero
 
 ## 🤝 Contribuciones
 
