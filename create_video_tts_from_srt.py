@@ -420,29 +420,40 @@ def get_audio_duration(file_path: Path) -> float:
     except (subprocess.CalledProcessError, ValueError):
         return 0.0
 
-def create_silence(duration: float, output: Path):
+def create_silence(duration: float, output: Path, error_logger: Optional[ErrorLogger] = None):
     """Crea un archivo de audio con silencio"""
-    subprocess.run(
-        ["ffmpeg", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono",
-         "-t", str(duration), "-q:a", "9", "-acodec", "pcm_s16le",
-         str(output), "-y"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=True
-    )
-
-def truncate_audio(input_file: Path, output_file: Path, duration: float) -> bool:
-    """Trunca audio a la duración especificada"""
     try:
         subprocess.run(
+            ["ffmpeg", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono",
+             "-t", str(duration), "-q:a", "9", "-acodec", "pcm_s16le",
+             str(output), "-y"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True
+        )
+    except subprocess.CalledProcessError as e:
+        error_msg = f"Error creando silencio de {duration}s"
+        if error_logger:
+            error_logger.add_error("Crear silencio", ' '.join(e.cmd), e.stderr or error_msg)
+        print(f"{Colors.RED}{error_msg}{Colors.NC}")
+        raise
+
+def truncate_audio(input_file: Path, output_file: Path, duration: float, error_logger: Optional[ErrorLogger] = None) -> bool:
+    """Trunca audio a la duración especificada"""
+    try:
+        result = subprocess.run(
             ["ffmpeg", "-i", str(input_file), "-t", str(duration),
              "-c:a", "copy", str(output_file), "-y"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
             check=True
         )
         return output_file.exists() and output_file.stat().st_size > 0
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as e:
+        if error_logger:
+            error_logger.add_error("Truncar audio", ' '.join(e.cmd), e.stderr or "Error truncando audio")
         return False
 
 def main():
@@ -626,9 +637,10 @@ def main():
                 full_audio = temp_dir / f"{subtitle.consecutive_id}_full.wav"
 
                 if tts_engine.generate_audio(clean_text, 240, full_audio):
-                    if truncate_audio(full_audio, audio_file, available_time):
+                    if truncate_audio(full_audio, audio_file, available_time, error_logger):
                         full_audio.unlink()
                         rate_usage['truncated'] += 1
+                        error_logger.add_warning(f"Subtítulo {subtitle.consecutive_id}: Audio truncado a {available_time:.3f}s")
                         print(f"  {Colors.GREEN}✅ Audio truncado a {available_time:.3f}s{Colors.NC}")
 
                         audio_segments[subtitle.consecutive_id] = AudioSegment(
@@ -902,7 +914,7 @@ def main():
 
     # Crear audio master con silencio inicial
     audio_master = temp_dir / "audio_master.wav"
-    create_silence(0.001, audio_master)
+    create_silence(0.001, audio_master, error_logger)
     current_master_duration = 0.0
     concat_counter = 0  # Contador para nombres únicos
 
@@ -924,19 +936,29 @@ def main():
         if gap > 0.01:
             print(f"  {Colors.GREEN}→ Agregando silencio de {gap:.3f}s{Colors.NC}")
             gap_file = temp_dir / f"gap_{subtitle.consecutive_id}.wav"
-            create_silence(gap, gap_file)
+            create_silence(gap, gap_file, error_logger)
 
             # Concatenar con nombre único
             concat_counter += 1
             temp_master = temp_dir / f"audio_concat_{concat_counter}.wav"
-            subprocess.run(
-                ["ffmpeg", "-i", str(audio_master), "-i", str(gap_file),
-                 "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[out]",
-                 "-map", "[out]", str(temp_master), "-y"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=True
-            )
+            try:
+                subprocess.run(
+                    ["ffmpeg", "-i", str(audio_master), "-i", str(gap_file),
+                     "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[out]",
+                     "-map", "[out]", str(temp_master), "-y"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=True
+                )
+            except subprocess.CalledProcessError as e:
+                error_logger.add_error(
+                    f"PASO 5: Concatenar gap (subtítulo {subtitle.consecutive_id})",
+                    ' '.join(e.cmd),
+                    e.stderr or "Error concatenando silencio gap"
+                )
+                print(f"{Colors.RED}Error concatenando gap{Colors.NC}")
+                raise
             # Eliminar master anterior si no es el inicial
             if audio_master != temp_dir / "audio_master.wav":
                 audio_master.unlink()
@@ -953,14 +975,24 @@ def main():
 
         concat_counter += 1
         temp_master = temp_dir / f"audio_concat_{concat_counter}.wav"
-        subprocess.run(
-            ["ffmpeg", "-i", str(audio_master), "-i", str(segment.audio_file),
-             "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[out]",
-             "-map", "[out]", str(temp_master), "-y"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=True
-        )
+        try:
+            subprocess.run(
+                ["ffmpeg", "-i", str(audio_master), "-i", str(segment.audio_file),
+                 "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[out]",
+                 "-map", "[out]", str(temp_master), "-y"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True
+            )
+        except subprocess.CalledProcessError as e:
+            error_logger.add_error(
+                f"PASO 5: Concatenar audio TTS (subtítulo {subtitle.consecutive_id})",
+                ' '.join(e.cmd),
+                e.stderr or "Error concatenando audio TTS"
+            )
+            print(f"{Colors.RED}Error concatenando audio TTS{Colors.NC}")
+            raise
         # Eliminar master anterior
         if audio_master != temp_dir / "audio_master.wav":
             audio_master.unlink()
@@ -979,18 +1011,28 @@ def main():
         if padding > 0.01:
             print(f"  {Colors.GREEN}→ Agregando padding de {padding:.3f}s{Colors.NC}")
             padding_file = temp_dir / f"padding_{subtitle.consecutive_id}.wav"
-            create_silence(padding, padding_file)
+            create_silence(padding, padding_file, error_logger)
 
             concat_counter += 1
             temp_master = temp_dir / f"audio_concat_{concat_counter}.wav"
-            subprocess.run(
-                ["ffmpeg", "-i", str(audio_master), "-i", str(padding_file),
-                 "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[out]",
-                 "-map", "[out]", str(temp_master), "-y"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=True
-            )
+            try:
+                subprocess.run(
+                    ["ffmpeg", "-i", str(audio_master), "-i", str(padding_file),
+                     "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[out]",
+                     "-map", "[out]", str(temp_master), "-y"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=True
+                )
+            except subprocess.CalledProcessError as e:
+                error_logger.add_error(
+                    "PASO 5: Concatenar padding",
+                    ' '.join(e.cmd),
+                    e.stderr or "Error concatenando padding"
+                )
+                print(f"{Colors.RED}Error concatenando padding{Colors.NC}")
+                raise
             # Eliminar master anterior
             if audio_master != temp_dir / "audio_master.wav":
                 audio_master.unlink()
