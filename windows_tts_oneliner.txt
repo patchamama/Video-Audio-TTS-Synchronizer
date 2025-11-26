@@ -52,9 +52,9 @@ Add-Type -AssemblyName System.Speech; $synth = New-Object System.Speech.Synthesi
 # pip install edge-tts
 
 # Usar:
-# edge-tts --text "Hola mundo" --write-media prueba.mp3 --voice es-ES-ElviraNeural
+# python -m edge_tts --text "Hola mundo" --write-media prueba.mp3 --voice es-ES-ElviraNeural
 
 # Listar voces en español:
-# edge-tts --list-voices | Select-String "es-"
+# python -m edge_tts --list-voices | Select-String "es-"
 
 # ============================================================================

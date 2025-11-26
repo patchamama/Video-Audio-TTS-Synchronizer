@@ -84,36 +84,36 @@ pip install edge-tts
 
 ```bash
 # Generar audio en español con voz neural de alta calidad
-edge-tts --text "Hola, esta es una prueba" --voice es-ES-ElviraNeural --write-media audio.mp3
+python -m edge_tts --text "Hola, esta es una prueba" --voice es-ES-ElviraNeural --write-media audio.mp3
 
 # Ver todas las voces en español
-edge-tts --list-voices | findstr "es-"
+python -m edge_tts --list-voices | findstr "es-"
 ```
 
 ### Voces Recomendadas en Español
 
 ```bash
 # Mujer - España
-edge-tts --voice es-ES-ElviraNeural --text "Prueba de voz femenina española" --write-media test.mp3
+python -m edge_tts --voice es-ES-ElviraNeural --text "Prueba de voz femenina española" --write-media test.mp3
 
 # Hombre - España
-edge-tts --voice es-ES-AlvaroNeural --text "Prueba de voz masculina española" --write-media test.mp3
+python -m edge_tts --voice es-ES-AlvaroNeural --text "Prueba de voz masculina española" --write-media test.mp3
 
 # Mujer - México
-edge-tts --voice es-MX-DaliaNeural --text "Prueba de voz femenina mexicana" --write-media test.mp3
+python -m edge_tts --voice es-MX-DaliaNeural --text "Prueba de voz femenina mexicana" --write-media test.mp3
 
 # Mujer - Argentina
-edge-tts --voice es-AR-ElenaNeural --text "Prueba de voz femenina argentina" --write-media test.mp3
+python -m edge_tts --voice es-AR-ElenaNeural --text "Prueba de voz femenina argentina" --write-media test.mp3
 ```
 
 ### Ajustar Velocidad con edge-tts
 
 ```bash
 # +50% más rápido
-edge-tts --text "Texto más rápido" --voice es-ES-ElviraNeural --rate=+50% --write-media rapido.mp3
+python -m edge_tts --text "Texto más rápido" --voice es-ES-ElviraNeural --rate=+50% --write-media rapido.mp3
 
 # -25% más lento
-edge-tts --text "Texto más lento" --voice es-ES-ElviraNeural --rate=-25% --write-media lento.mp3
+python -m edge_tts --text "Texto más lento" --voice es-ES-ElviraNeural --rate=-25% --write-media lento.mp3
 ```
 
 ## 📊 Comparación de Métodos

@@ -146,6 +146,6 @@ if __name__ == '__main__':
     print("   en el script principal para soporte de Windows")
     print("\n3. Para mejor calidad en español, considera edge-tts:")
     print("   pip install edge-tts")
-    print('   edge-tts --text "Hola" --voice es-ES-ElviraNeural --write-media test.mp3')
+    print('   python -m edge_tts --text "Hola" --voice es-ES-ElviraNeural --write-media test.mp3')
 
     sys.exit(0 if success else 1)
