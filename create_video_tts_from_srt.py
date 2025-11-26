@@ -212,41 +212,78 @@ class TTSEngine:
                 return True
 
             elif self.method == "python":
-                # Python gTTS integrado
+                # Python gTTS integrado con reintentos
                 from gtts import gTTS
                 from pydub import AudioSegment
                 from pydub.effects import speedup
+                import time
 
-                # Generar audio con gTTS
-                tts = gTTS(text=text, lang='es', slow=False)
-                temp_mp3 = output_file.with_suffix('.mp3')
-                tts.save(str(temp_mp3))
+                # Reintentar hasta 3 veces con backoff exponencial
+                max_retries = 3
+                retry_delay = 1.0
 
-                # Cargar audio con pydub
-                audio = AudioSegment.from_mp3(str(temp_mp3))
+                for attempt in range(max_retries):
+                    try:
+                        # Generar audio con gTTS
+                        tts = gTTS(text=text, lang='es', slow=False)
+                        temp_mp3 = output_file.with_suffix('.mp3')
+                        tts.save(str(temp_mp3))
 
-                # Ajustar velocidad según rate
-                # gTTS genera a ~150 WPM, ajustamos según el rate deseado
-                speed_factor = rate / 150.0
+                        # Cargar audio con pydub
+                        audio = AudioSegment.from_mp3(str(temp_mp3))
 
-                if speed_factor != 1.0:
-                    # Ajustar velocidad sin cambiar el pitch
-                    if speed_factor > 1.0:
-                        audio = speedup(audio, playback_speed=speed_factor)
-                    else:
-                        # Para velocidades más lentas, usar frame_rate
-                        audio = audio._spawn(audio.raw_data, overrides={
-                            "frame_rate": int(audio.frame_rate * speed_factor)
-                        })
-                        audio = audio.set_frame_rate(44100)
+                        # Ajustar velocidad según rate
+                        # gTTS genera a ~150 WPM, ajustamos según el rate deseado
+                        speed_factor = rate / 150.0
 
-                # Exportar a WAV
-                audio.export(str(output_file), format='wav')
+                        if speed_factor != 1.0:
+                            # Ajustar velocidad sin cambiar el pitch
+                            if speed_factor > 1.0:
+                                audio = speedup(audio, playback_speed=speed_factor)
+                            else:
+                                # Para velocidades más lentas, usar frame_rate
+                                audio = audio._spawn(audio.raw_data, overrides={
+                                    "frame_rate": int(audio.frame_rate * speed_factor)
+                                })
+                                audio = audio.set_frame_rate(44100)
 
-                # Limpiar archivo temporal
-                temp_mp3.unlink()
+                        # Exportar a WAV
+                        audio.export(str(output_file), format='wav')
 
-                return output_file.exists()
+                        # Limpiar archivo temporal
+                        if temp_mp3.exists():
+                            temp_mp3.unlink()
+
+                        return output_file.exists()
+
+                    except Exception as e:
+                        error_msg = str(e)
+
+                        # Detectar tipo de error
+                        if "Failed to connect" in error_msg or "Connection" in error_msg:
+                            if attempt < max_retries - 1:
+                                print(f"{Colors.YELLOW}  ⚠ Error de conexión (intento {attempt + 1}/{max_retries}). Reintentando en {retry_delay:.1f}s...{Colors.NC}")
+                                time.sleep(retry_delay)
+                                retry_delay *= 2  # Backoff exponencial
+                                continue
+                            else:
+                                print(f"{Colors.RED}  ✗ Error: gTTS no puede conectarse a Google después de {max_retries} intentos{Colors.NC}")
+                                print(f"{Colors.YELLOW}  Posibles causas:{Colors.NC}")
+                                print(f"{Colors.YELLOW}    1. Sin conexión a internet{Colors.NC}")
+                                print(f"{Colors.YELLOW}    2. Firewall bloqueando acceso a Google TTS{Colors.NC}")
+                                print(f"{Colors.YELLOW}    3. Proxy o VPN interferiendo{Colors.NC}")
+                                print(f"{Colors.CYAN}  💡 Sugerencia: Verifica tu conexión a internet{Colors.NC}")
+                                return False
+                        else:
+                            # Otro tipo de error
+                            print(f"{Colors.RED}  ✗ Error generando TTS: {error_msg}{Colors.NC}")
+                            if attempt < max_retries - 1:
+                                time.sleep(retry_delay)
+                                retry_delay *= 2
+                                continue
+                            return False
+
+                return False
 
         except Exception as e:
             print(f"{Colors.RED}Error: TTS falló para rate {rate}: {e}{Colors.NC}", file=sys.stderr)
