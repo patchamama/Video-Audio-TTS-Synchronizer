@@ -53,7 +53,7 @@ macOS:
 Linux/Otros:
   - ffmpeg
   - Python 3.x
-  - pip3 install gtts pydub
+  - sudo apt install python3-gtts python3-pydub
 
 ARCHIVOS GENERADOS
 ==================
@@ -62,7 +62,7 @@ ARCHIVOS GENERADOS
 - {video}_debug.srt       : Subtítulos con metadatos de TTS (rate, offsets, truncados)
 - {video}_con_tts.mkv     : Video final con audio TTS sincronizado
 - {video}_sin_pausas.mkv  : Video final sin pausas largas (si se usa --remove-breaks)
-- temp_audio_*/           : Carpeta temporal con archivos de audio (se elimina al finalizar)
+- temp_audio_YYYYMMDD_HHMMSS/ : Carpeta temporal en directorio actual (conservada en modo --test)
 
 PROCESO
 =======
@@ -99,6 +99,51 @@ class Colors:
     MAGENTA = '\033[0;35m'
     CYAN = '\033[0;36m'
     NC = '\033[0m'  # No Color
+
+class ErrorLogger:
+    """Registra errores durante la ejecución"""
+    def __init__(self):
+        self.errors: List[Dict[str, str]] = []
+        self.warnings: List[str] = []
+
+    def add_error(self, step: str, command: str, error_msg: str):
+        """Registra un error de ffmpeg"""
+        self.errors.append({
+            'step': step,
+            'command': command,
+            'error': error_msg
+        })
+
+    def add_warning(self, message: str):
+        """Registra una advertencia"""
+        self.warnings.append(message)
+
+    def has_errors(self) -> bool:
+        """Verifica si hay errores registrados"""
+        return len(self.errors) > 0
+
+    def print_summary(self):
+        """Imprime resumen de errores y advertencias"""
+        if self.warnings:
+            print(f"\n{Colors.YELLOW}{'═' * 50}{Colors.NC}")
+            print(f"{Colors.YELLOW}⚠️  ADVERTENCIAS ({len(self.warnings)}){Colors.NC}")
+            print(f"{Colors.YELLOW}{'═' * 50}{Colors.NC}")
+            for idx, warning in enumerate(self.warnings, 1):
+                print(f"{Colors.YELLOW}{idx}. {warning}{Colors.NC}")
+
+        if self.errors:
+            print(f"\n{Colors.RED}{'═' * 50}{Colors.NC}")
+            print(f"{Colors.RED}❌ ERRORES DETECTADOS ({len(self.errors)}){Colors.NC}")
+            print(f"{Colors.RED}{'═' * 50}{Colors.NC}")
+            for idx, error in enumerate(self.errors, 1):
+                print(f"\n{Colors.RED}Error {idx}:{Colors.NC}")
+                print(f"{Colors.CYAN}  Paso: {error['step']}{Colors.NC}")
+                print(f"{Colors.YELLOW}  Comando: {error['command']}{Colors.NC}")
+                print(f"{Colors.RED}  Error:{Colors.NC}")
+                # Mostrar últimas 15 líneas del error
+                error_lines = error['error'].strip().split('\n')
+                for line in error_lines[-15:]:
+                    print(f"    {line}")
 
 @dataclass
 class Subtitle:
@@ -149,7 +194,7 @@ class TTSEngine:
                 return "python"
             except ImportError:
                 print(f"{Colors.RED}✗ Error: Faltan dependencias de Python{Colors.NC}")
-                print(f"{Colors.YELLOW}Instala con: pip3 install gtts pydub{Colors.NC}")
+                print(f"{Colors.YELLOW}Instala con: sudo apt install python3-gtts python3-pydub{Colors.NC}")
                 sys.exit(1)
 
         print(f"{Colors.RED}✗ Error: No se encontró método TTS compatible{Colors.NC}")
@@ -420,6 +465,9 @@ def main():
 
     args = parser.parse_args()
 
+    # Inicializar logger de errores
+    error_logger = ErrorLogger()
+
     # Mostrar configuración
     print(f"{Colors.BLUE}{'═' * 50}{Colors.NC}")
     print(f"{Colors.BLUE}🔍 DETECTANDO MÉTODO TTS{Colors.NC}")
@@ -485,8 +533,11 @@ def main():
     print(f"{Colors.GREEN}✅ SRT de trabajo generado: {working_srt}{Colors.NC}")
     print(f"{Colors.CYAN}   (IDs renumerados: 1-{len(subtitles)}){Colors.NC}")
 
-    # Crear directorio temporal
-    temp_dir = Path(tempfile.mkdtemp(prefix="temp_audio_"))
+    # Crear directorio temporal en el directorio actual
+    import datetime
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    temp_dir = Path.cwd() / f"temp_audio_{timestamp}"
+    temp_dir.mkdir(exist_ok=True)
     logs_dir = temp_dir / "logs"
     logs_dir.mkdir(exist_ok=True)
     print(f"{Colors.GREEN}Carpeta temporal: {temp_dir}{Colors.NC}")
@@ -1156,11 +1207,15 @@ def main():
     print(f"{Colors.GREEN}✅ {working_srt}{Colors.NC}")
     print(f"{Colors.GREEN}✅ {debug_srt}{Colors.NC}")
 
+    # Mostrar resumen de errores si los hay
+    if args.test or error_logger.has_errors() or error_logger.warnings:
+        error_logger.print_summary()
+
     if args.test or args.only_remove_breaks:
         print(f"{Colors.YELLOW}⚠️  Conservando: {temp_dir}{Colors.NC}")
     else:
         print(f"{Colors.YELLOW}Limpiando temporales...{Colors.NC}")
-        # shutil.rmtree(temp_dir)  # Descomentardescomentaryar cuando esté probado
+        # shutil.rmtree(temp_dir)  # Descomentar cuando esté probado
 
     print(f"{Colors.GREEN}¡Proceso completado!{Colors.NC}")
 

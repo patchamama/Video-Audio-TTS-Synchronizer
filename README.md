@@ -56,16 +56,16 @@ brew install ffmpeg
 
 **Linux/Ubuntu:**
 ```bash
-sudo apt-get install ffmpeg python3 python3-pip
-pip3 install gtts pydub
+sudo apt-get install ffmpeg python3
+sudo apt install python3-gtts python3-pydub
 ```
 
 ### Python
 
 - Python 3.7+
-- Dependencias:
-  - `gtts` (solo Linux)
-  - `pydub` (solo Linux)
+- Dependencias (Linux):
+  - `python3-gtts` (desde repositorios apt)
+  - `python3-pydub` (desde repositorios apt)
 
 ## 🚀 Instalación
 
@@ -75,7 +75,7 @@ git clone https://github.com/tu-usuario/Video-Audio-TTS-Synchronizer.git
 cd Video-Audio-TTS-Synchronizer
 
 # Instalar dependencias (Linux)
-pip3 install gtts pydub
+sudo apt install python3-gtts python3-pydub
 
 # Verificar ffmpeg
 ffmpeg -version
@@ -442,7 +442,7 @@ flowchart TD
 |---------|-------------|-----------|
 | `{video}_working.srt` | Subtítulos con IDs renumerados 1-N | Directorio de trabajo |
 | `{video}_debug.srt` | Subtítulos con metadatos TTS (rate, offsets, flags) | Directorio de trabajo |
-| `temp_audio_*/` | Carpeta temporal con audios individuales y master | `/tmp/` o `$TMPDIR` |
+| `temp_audio_*/` | Carpeta temporal con audios individuales y master | Directorio actual de trabajo |
 | `temp_audio_*/logs/` | Logs de generación TTS | Dentro de temp_audio |
 
 ### Salida Final
