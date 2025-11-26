@@ -436,7 +436,9 @@ while IFS= read -r line || [ -n "$line" ]; do
         current_id=$line
         reading_text=false
     elif [[ $line =~ ^[0-9]{2}:[0-9]{2}:[0-9]{2},[0-9]{3}\ --\>\ [0-9]{2}:[0-9]{2}:[0-9]{2},[0-9]{3} ]]; then
-        IFS=' --> ' read -r start_time end_time <<< "$line"
+        # Extraer tiempos usando regex para evitar problemas con IFS
+        start_time=$(echo "$line" | sed -E 's/^([0-9]{2}:[0-9]{2}:[0-9]{2},[0-9]{3}).*$/\1/')
+        end_time=$(echo "$line" | sed -E 's/^.*--> ([0-9]{2}:[0-9]{2}:[0-9]{2},[0-9]{3})$/\1/')
 
         # Validar que tiempo final >= tiempo inicial
         start_seconds_check=$(srt_time_to_seconds "$start_time")
