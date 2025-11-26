@@ -919,13 +919,14 @@ def main():
         output_video = video_path.with_suffix('').with_name(f"{video_path.stem}_con_tts.mkv")
 
         try:
-            subprocess.run(
+            result = subprocess.run(
                 ["ffmpeg", "-i", str(video_to_use), "-i", str(audio_final),
                  "-map", "0:v:0", "-map", "1:a:0",
                  "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
                  "-shortest", str(output_video), "-y"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
                 check=True
             )
 
@@ -935,8 +936,15 @@ def main():
 
             print(f"{Colors.GREEN}✅ Video: {output_video}{Colors.NC}")
 
-        except subprocess.CalledProcessError:
+        except subprocess.CalledProcessError as e:
             print(f"{Colors.RED}✗ Error fusionando video y audio{Colors.NC}")
+            print(f"{Colors.YELLOW}Comando: {' '.join(e.cmd)}{Colors.NC}")
+            if e.stderr:
+                print(f"{Colors.YELLOW}Error de ffmpeg:{Colors.NC}")
+                # Mostrar solo las últimas 20 líneas del error
+                error_lines = e.stderr.strip().split('\n')
+                for line in error_lines[-20:]:
+                    print(f"  {line}")
             sys.exit(1)
 
     # PASO 7: Eliminar pausas largas (si está activado)
