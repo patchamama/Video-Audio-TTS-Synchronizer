@@ -430,6 +430,7 @@ declare -A original_ids  # Mapeo de ID consecutivo -> ID original
 # Contador para IDs consecutivos
 consecutive_id=0
 has_errors=false
+validation_count=0
 
 while IFS= read -r line || [ -n "$line" ]; do
     if [[ $line =~ ^[0-9]+$ ]]; then
@@ -482,6 +483,12 @@ while IFS= read -r line || [ -n "$line" ]; do
             # Limpiar datos temporales del ID original
             unset subtitle_starts[$current_id]
             unset subtitle_ends[$current_id]
+
+            # Mostrar progreso cada 100 subtítulos
+            validation_count=$((validation_count + 1))
+            if [ $((validation_count % 100)) -eq 0 ]; then
+                echo -n "."
+            fi
         fi
         current_id=""
         current_text=""
@@ -513,8 +520,19 @@ if [ -n "$current_id" ] && [ -n "$current_text" ]; then
             subtitle_starts[$consecutive_id]=${subtitle_starts[$current_id]}
             subtitle_ends[$consecutive_id]=${subtitle_ends[$current_id]}
             original_ids[$consecutive_id]=$current_id
+
+            # Mostrar progreso cada 100 subtítulos
+            validation_count=$((validation_count + 1))
+            if [ $((validation_count % 100)) -eq 0 ]; then
+                echo -n "."
+            fi
         fi
     fi
+fi
+
+# Nueva línea después de los puntos de progreso
+if [ $validation_count -gt 0 ]; then
+    echo ""
 fi
 
 if [ "$has_errors" = true ]; then
