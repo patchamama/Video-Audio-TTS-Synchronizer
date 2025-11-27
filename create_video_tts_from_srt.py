@@ -92,13 +92,28 @@ import shutil
 
 # Colores para terminal
 class Colors:
-    RED = '\033[0;31m'
-    GREEN = '\033[0;32m'
-    YELLOW = '\033[1;33m'
-    BLUE = '\033[0;34m'
-    MAGENTA = '\033[0;35m'
-    CYAN = '\033[0;36m'
-    NC = '\033[0m'  # No Color
+    """Códigos de colores ANSI (desactivados en Windows)"""
+    # Detectar si estamos en Windows
+    _is_windows = platform.system() == "Windows"
+
+    if _is_windows:
+        # En Windows, no usar códigos de color para evitar caracteres extraños
+        RED = ''
+        GREEN = ''
+        YELLOW = ''
+        BLUE = ''
+        MAGENTA = ''
+        CYAN = ''
+        NC = ''
+    else:
+        # En Unix/Linux/macOS, usar códigos ANSI
+        RED = '\033[0;31m'
+        GREEN = '\033[0;32m'
+        YELLOW = '\033[1;33m'
+        BLUE = '\033[0;34m'
+        MAGENTA = '\033[0;35m'
+        CYAN = '\033[0;36m'
+        NC = '\033[0m'  # No Color
 
 class ErrorLogger:
     """Registra errores durante la ejecución"""
