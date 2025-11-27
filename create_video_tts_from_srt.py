@@ -1008,6 +1008,38 @@ def interactive_prompt():
         print(f"{Colors.RED}Error: {e}{Colors.NC}")
         sys.exit(1)
 
+def save_checkpoint(temp_dir: Path, srt_file: str, video_file: str,
+                   params: dict, last_subtitle_id: int, total_subtitles: int):
+    """Guarda el estado actual del procesamiento para poder reanudar"""
+    checkpoint_file = temp_dir / "checkpoint.json"
+
+    checkpoint_data = {
+        "srt_file": str(Path(srt_file).absolute()),
+        "video_file": str(Path(video_file).absolute()),
+        "parameters": params,
+        "last_subtitle_id": last_subtitle_id,
+        "total_subtitles": total_subtitles,
+        "timestamp": datetime.datetime.now().isoformat(),
+        "temp_dir": str(temp_dir.absolute())
+    }
+
+    with open(checkpoint_file, 'w', encoding='utf-8') as f:
+        json.dump(checkpoint_data, f, indent=2, ensure_ascii=False)
+
+def load_checkpoint(temp_dir: Path) -> Optional[dict]:
+    """Carga el checkpoint de una carpeta temporal"""
+    checkpoint_file = temp_dir / "checkpoint.json"
+
+    if not checkpoint_file.exists():
+        return None
+
+    try:
+        with open(checkpoint_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"{Colors.RED}Error cargando checkpoint: {e}{Colors.NC}")
+        return None
+
 def main():
     parser = argparse.ArgumentParser(
         description="Genera audio TTS sincronizado con video desde archivo SRT",
@@ -1026,10 +1058,36 @@ def main():
                        help="Eliminar pausas >15min del video final")
     parser.add_argument("--only-remove-breaks", action="store_true",
                        help="SOLO eliminar pausas del video (sin TTS)")
+    parser.add_argument("--continue", dest="continue_from", type=str,
+                       help="Reanudar desde carpeta temporal (ej: temp_video_abc123)")
     parser.add_argument("-h", "--help", action="store_true",
                        help="Mostrar ayuda")
 
     args = parser.parse_args()
+
+    # Si se especifica --continue, cargar checkpoint y reanudar
+    if args.continue_from:
+        temp_dir_path = Path(args.continue_from)
+        if not temp_dir_path.exists():
+            print(f"{Colors.RED}Error: Carpeta temporal no existe: {temp_dir_path}{Colors.NC}")
+            sys.exit(1)
+
+        checkpoint = load_checkpoint(temp_dir_path)
+        if not checkpoint:
+            print(f"{Colors.RED}Error: No se encontró checkpoint en {temp_dir_path}{Colors.NC}")
+            sys.exit(1)
+
+        print(f"{Colors.GREEN}📂 Reanudando desde checkpoint{Colors.NC}")
+        print(f"{Colors.CYAN}   Carpeta: {temp_dir_path}{Colors.NC}")
+        print(f"{Colors.CYAN}   SRT: {Path(checkpoint['srt_file']).name}{Colors.NC}")
+        print(f"{Colors.CYAN}   Último subtítulo procesado: {checkpoint['last_subtitle_id']}/{checkpoint['total_subtitles']}{Colors.NC}")
+        print(f"{Colors.CYAN}   Guardado: {checkpoint['timestamp']}{Colors.NC}")
+
+        # Sobrescribir args con datos del checkpoint
+        args.srt_file = checkpoint['srt_file']
+        args.video = checkpoint['video_file']
+        for key, value in checkpoint['parameters'].items():
+            setattr(args, key, value)
 
     # Si se pide ayuda o no hay parámetros, mostrar uso y prompt
     if args.help or (not args.srt_file and not args.video):
@@ -1123,14 +1181,35 @@ def main():
     print(f"{Colors.GREEN}✅ SRT de trabajo generado: {working_srt}{Colors.NC}")
     print(f"{Colors.CYAN}   (IDs renumerados: 1-{len(subtitles)}){Colors.NC}")
 
-    # Crear directorio temporal en el directorio actual
+    # Crear o usar directorio temporal
     import datetime
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    temp_dir = Path.cwd() / f"temp_audio_{timestamp}"
-    temp_dir.mkdir(exist_ok=True)
+    import uuid
+
+    # Si estamos reanudando, usar la carpeta del checkpoint
+    if args.continue_from:
+        temp_dir = Path(args.continue_from)
+        checkpoint = load_checkpoint(temp_dir)
+        last_processed_id = checkpoint['last_subtitle_id']
+        print(f"{Colors.GREEN}♻️  Reanudando desde subtítulo {last_processed_id + 1}{Colors.NC}")
+    else:
+        # Crear directorio temporal con nombre descriptivo
+        srt_base_name = Path(args.srt_file).stem
+        random_code = str(uuid.uuid4())[:8]
+        temp_dir = Path.cwd() / f"temp_{srt_base_name}_{random_code}"
+        temp_dir.mkdir(exist_ok=True)
+        last_processed_id = 0
+        print(f"{Colors.GREEN}Carpeta temporal: {temp_dir}{Colors.NC}")
+
     logs_dir = temp_dir / "logs"
     logs_dir.mkdir(exist_ok=True)
-    print(f"{Colors.GREEN}Carpeta temporal: {temp_dir}{Colors.NC}")
+
+    # Preparar parámetros para checkpoint
+    checkpoint_params = {
+        'test': args.test,
+        'solo_audio': args.solo_audio,
+        'no_freeze': args.no_freeze,
+        'remove_breaks': args.remove_breaks
+    }
 
     # PASO 2: Generar audios con ajuste inteligente
     print(f"{Colors.BLUE}{'═' * 50}{Colors.NC}")
@@ -1143,7 +1222,26 @@ def main():
     learning_phase = True
     processed_count = 0
 
+    srt_filename = Path(args.srt_file).name
+
     for idx, subtitle in enumerate(subtitles):
+        # Skip already processed subtitles when resuming
+        if subtitle.consecutive_id <= last_processed_id:
+            print(f"{Colors.CYAN}⏭️  Saltando subtítulo {subtitle.consecutive_id}/{len(subtitles)} (ya procesado){Colors.NC}")
+            # Still load the audio segment for final processing
+            audio_file = temp_dir / f"{subtitle.consecutive_id}.wav"
+            if audio_file.exists():
+                # Determine if it needs freeze or was truncated from existing data
+                # For now, assume basic AudioSegment (will be correct in final video)
+                audio_segments[subtitle.consecutive_id] = AudioSegment(
+                    subtitle_id=subtitle.consecutive_id,
+                    audio_file=audio_file,
+                    rate=180,  # Default, actual rate doesn't matter for skipped
+                    needs_freeze=False,
+                    was_truncated=False
+                )
+            continue
+
         # Limpiar texto HTML
         clean_text = re.sub(r'<[^>]*>', '', subtitle.text)
 
@@ -1155,8 +1253,8 @@ def main():
             available_time = subtitle.duration
 
         print(f"{Colors.YELLOW}{'━' * 50}{Colors.NC}")
-        print(f"{Colors.YELLOW}Subtítulo {subtitle.consecutive_id} "
-              f"{Colors.CYAN}(ID original: {subtitle.original_id}){Colors.NC}")
+        print(f"{Colors.YELLOW}📄 {srt_filename} - Subtítulo {subtitle.consecutive_id}/{len(subtitles)}{Colors.NC}")
+        print(f"{Colors.CYAN}  (ID original: {subtitle.original_id}){Colors.NC}")
         print(f"{Colors.YELLOW}  Texto: {clean_text[:50]}...{Colors.NC}")
         print(f"{Colors.BLUE}  Duración subtítulo: {subtitle.duration:.3f}s{Colors.NC}")
         print(f"{Colors.BLUE}  Tiempo disponible: {available_time:.3f}s{Colors.NC}")
@@ -1252,6 +1350,12 @@ def main():
 
         processed_count += 1
 
+        # Save checkpoint every 10 subtitles
+        if subtitle.consecutive_id % 10 == 0:
+            save_checkpoint(temp_dir, args.srt_file, str(video_path),
+                           checkpoint_params, subtitle.consecutive_id, len(subtitles))
+            print(f"{Colors.GREEN}💾 Checkpoint guardado (subtítulo {subtitle.consecutive_id}/{len(subtitles)}){Colors.NC}")
+
         # Análisis de aprendizaje
         if processed_count == 50 and learning_phase:
             print(f"{Colors.MAGENTA}{'━' * 50}{Colors.NC}")
@@ -1272,6 +1376,12 @@ def main():
             learning_phase = False
             print(f"{Colors.GREEN}🎯 Rate óptimo determinado: {optimal_rate} wpm{Colors.NC}")
             print(f"{Colors.MAGENTA}{'━' * 50}{Colors.NC}")
+
+    # Save final checkpoint
+    if subtitles:
+        save_checkpoint(temp_dir, args.srt_file, str(video_path),
+                       checkpoint_params, subtitles[-1].consecutive_id, len(subtitles))
+        print(f"{Colors.GREEN}💾 Checkpoint final guardado{Colors.NC}")
 
     print(f"{Colors.GREEN}✅ Audios generados{Colors.NC}")
 
