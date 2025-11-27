@@ -167,6 +167,33 @@ class AudioSegment:
     freeze_duration: float = 0.0
     was_truncated: bool = False
 
+def get_unique_output_path(base_path: Path) -> Path:
+    """
+    Genera un nombre de archivo único si el archivo ya existe.
+    Si video_con_tts.mkv existe, intenta video_con_tts_1.mkv, video_con_tts_2.mkv, etc.
+    """
+    if not base_path.exists():
+        return base_path
+
+    # Extraer partes del nombre
+    stem = base_path.stem
+    suffix = base_path.suffix
+    parent = base_path.parent
+
+    # Intentar con números incrementales
+    counter = 1
+    while True:
+        new_path = parent / f"{stem}_{counter}{suffix}"
+        if not new_path.exists():
+            return new_path
+        counter += 1
+        # Límite de seguridad para evitar loop infinito
+        if counter > 9999:
+            # Usar timestamp como último recurso
+            import time
+            timestamp = int(time.time())
+            return parent / f"{stem}_{timestamp}{suffix}"
+
 class TTSEngine:
     """Maneja la generación de TTS"""
 
@@ -1644,7 +1671,13 @@ def main():
 
         output_video = None
     else:
-        output_video = video_path.with_suffix('').with_name(f"{video_path.stem}_con_tts.mkv")
+        # Generar nombre base y obtener nombre único si ya existe
+        base_output = video_path.with_suffix('').with_name(f"{video_path.stem}_con_tts.mkv")
+        output_video = get_unique_output_path(base_output)
+
+        if output_video != base_output:
+            print(f"{Colors.YELLOW}⚠ El archivo {base_output.name} ya existe{Colors.NC}")
+            print(f"{Colors.CYAN}ℹ Generando nuevo archivo: {output_video.name}{Colors.NC}")
 
         try:
             result = subprocess.run(
@@ -1774,9 +1807,15 @@ def main():
                     for seg in segment_files:
                         f.write(f"file '{seg}'\n")
 
-                output_video_clean = video_path.with_suffix('').with_name(
+                # Generar nombre base y obtener nombre único si ya existe
+                base_clean_output = video_path.with_suffix('').with_name(
                     f"{video_path.stem}_clean_breaks.mkv"
                 )
+                output_video_clean = get_unique_output_path(base_clean_output)
+
+                if output_video_clean != base_clean_output:
+                    print(f"{Colors.YELLOW}⚠ El archivo {base_clean_output.name} ya existe{Colors.NC}")
+                    print(f"{Colors.CYAN}ℹ Generando nuevo archivo: {output_video_clean.name}{Colors.NC}")
 
                 try:
                     subprocess.run(
