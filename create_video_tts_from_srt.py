@@ -92,13 +92,28 @@ import shutil
 
 # Colores para terminal
 class Colors:
-    RED = '\033[0;31m'
-    GREEN = '\033[0;32m'
-    YELLOW = '\033[1;33m'
-    BLUE = '\033[0;34m'
-    MAGENTA = '\033[0;35m'
-    CYAN = '\033[0;36m'
-    NC = '\033[0m'  # No Color
+    """Códigos de colores ANSI (desactivados en Windows)"""
+    # Detectar si estamos en Windows
+    _is_windows = platform.system() == "Windows"
+
+    if _is_windows:
+        # En Windows, no usar códigos de color para evitar caracteres extraños
+        RED = ''
+        GREEN = ''
+        YELLOW = ''
+        BLUE = ''
+        MAGENTA = ''
+        CYAN = ''
+        NC = ''
+    else:
+        # En Unix/Linux/macOS, usar códigos ANSI
+        RED = '\033[0;31m'
+        GREEN = '\033[0;32m'
+        YELLOW = '\033[1;33m'
+        BLUE = '\033[0;34m'
+        MAGENTA = '\033[0;35m'
+        CYAN = '\033[0;36m'
+        NC = '\033[0m'  # No Color
 
 class ErrorLogger:
     """Registra errores durante la ejecución"""
@@ -167,32 +182,68 @@ class AudioSegment:
     freeze_duration: float = 0.0
     was_truncated: bool = False
 
+def get_unique_output_path(base_path: Path) -> Path:
+    """
+    Genera un nombre de archivo único si el archivo ya existe.
+    Si video_con_tts.mkv existe, intenta video_con_tts_1.mkv, video_con_tts_2.mkv, etc.
+    """
+    if not base_path.exists():
+        return base_path
+
+    # Extraer partes del nombre
+    stem = base_path.stem
+    suffix = base_path.suffix
+    parent = base_path.parent
+
+    # Intentar con números incrementales
+    counter = 1
+    while True:
+        new_path = parent / f"{stem}_{counter}{suffix}"
+        if not new_path.exists():
+            return new_path
+        counter += 1
+        # Límite de seguridad para evitar loop infinito
+        if counter > 9999:
+            # Usar timestamp como último recurso
+            import time
+            timestamp = int(time.time())
+            return parent / f"{stem}_{timestamp}{suffix}"
+
 class TTSEngine:
     """Maneja la generación de TTS"""
 
     def __init__(self):
         self.method = self._detect_method()
+        self.gtts_consecutive_failures = 0
+        self.gtts_permanently_disabled = False
+        self.using_fallback = False
 
     def _detect_method(self) -> str:
         """Detecta el método TTS disponible"""
-        if platform.system() == "Darwin":
+        system = platform.system()
+
+        if system == "Darwin":
             if shutil.which("say"):
                 print(f"{Colors.GREEN}✓ Sistema: macOS - Usando comando 'say'{Colors.NC}")
                 return "say"
 
-        # Intentar usar gTTS para Linux/otros
+        elif system == "Windows":
+            print(f"{Colors.GREEN}✓ Sistema: Windows - Usando edge-tts (con fallback a SAPI){Colors.NC}")
+            return "windows"
+
+        # Linux u otros sistemas
         try:
             import gtts
             from pydub import AudioSegment
-            print(f"{Colors.GREEN}✓ Sistema: Linux/Otro - Usando Python + gTTS (con fallback a espeak-ng){Colors.NC}")
-            return "python"
+            print(f"{Colors.GREEN}✓ Sistema: Linux - Usando gTTS (con fallback a espeak-ng){Colors.NC}")
+            return "linux"
         except ImportError:
             print(f"{Colors.RED}✗ Error: Faltan dependencias de Python{Colors.NC}")
             print(f"{Colors.YELLOW}Instala con: sudo apt install python3-gtts python3-pydub{Colors.NC}")
             sys.exit(1)
 
     def _generate_with_espeak(self, text: str, rate: int, output_file: Path) -> bool:
-        """Genera audio usando espeak-ng (offline fallback)"""
+        """Genera audio usando espeak-ng (offline fallback para Linux)"""
         try:
             # Verificar que espeak-ng está instalado
             if not shutil.which("espeak-ng"):
@@ -220,6 +271,79 @@ class TTSEngine:
         except Exception as e:
             return False
 
+    def _generate_with_edge_tts(self, text: str, rate: int, output_file: Path) -> bool:
+        """Genera audio usando edge-tts (Windows online)"""
+        try:
+            # Calcular rate para edge-tts (en porcentaje)
+            # rate 180 = normal (0%), 200 = +11%, 220 = +22%, 240 = +33%
+            rate_percent = int(((rate - 180) / 180) * 100)
+            rate_arg = f"+{rate_percent}%" if rate_percent >= 0 else f"{rate_percent}%"
+
+            # Generar MP3 primero con edge-tts
+            temp_mp3 = output_file.with_suffix('.mp3')
+
+            cmd = [
+                sys.executable, '-m', 'edge_tts',
+                '--text', text,
+                '--voice', 'es-ES-ElviraNeural',
+                '--rate', rate_arg,
+                '--write-media', str(temp_mp3)
+            ]
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=30
+            )
+
+            # Convertir MP3 a WAV con ffmpeg
+            if temp_mp3.exists():
+                subprocess.run(
+                    ['ffmpeg', '-i', str(temp_mp3), str(output_file), '-y'],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                temp_mp3.unlink()
+                return output_file.exists()
+
+            return False
+
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as e:
+            return False
+        except Exception as e:
+            return False
+
+    def _generate_with_sapi(self, text: str, rate: int, output_file: Path) -> bool:
+        """Genera audio usando SAPI de Windows (offline fallback para Windows)"""
+        try:
+            import pyttsx3
+
+            engine = pyttsx3.init()
+
+            # Buscar voz en español
+            voices = engine.getProperty('voices')
+            for voice in voices:
+                if 'spanish' in voice.name.lower() or 'es' in str(voice.languages).lower():
+                    engine.setProperty('voice', voice.id)
+                    break
+
+            # Configurar velocidad (pyttsx3 usa WPM directamente)
+            engine.setProperty('rate', rate)
+
+            # Generar audio
+            engine.save_to_file(text, str(output_file))
+            engine.runAndWait()
+
+            return output_file.exists()
+
+        except ImportError:
+            return False
+        except Exception as e:
+            return False
+
     def generate_audio(self, text: str, rate: int, output_file: Path) -> bool:
         """Genera audio TTS con el rate especificado"""
         try:
@@ -240,12 +364,41 @@ class TTSEngine:
                 aiff_file.unlink()
                 return True
 
-            elif self.method == "python":
-                # Python gTTS integrado con reintentos
+            elif self.method == "windows":
+                # Windows: Intentar edge-tts primero, luego SAPI
+                import time
+
+                # Intentar con edge-tts (online, mejor calidad)
+                if self._generate_with_edge_tts(text, rate, output_file):
+                    return True
+
+                # Si edge-tts falla, usar SAPI (offline fallback)
+                print(f"{Colors.CYAN}  🔄 edge-tts no disponible, usando SAPI (TTS offline)...{Colors.NC}")
+                if self._generate_with_sapi(text, rate, output_file):
+                    print(f"{Colors.GREEN}  ✓ Audio generado con SAPI{Colors.NC}")
+                    return True
+                else:
+                    print(f"{Colors.RED}  ✗ SAPI no está disponible{Colors.NC}")
+                    print(f"{Colors.YELLOW}  Instala con: pip install pyttsx3{Colors.NC}")
+                    return False
+
+            elif self.method == "linux":
+                # Linux: gTTS integrado con reintentos y fallback a espeak-ng
                 from gtts import gTTS
                 from pydub import AudioSegment
                 from pydub.effects import speedup
                 import time
+
+                # Si gTTS fue deshabilitado permanentemente, usar espeak-ng directamente
+                if self.gtts_permanently_disabled:
+                    if not self.using_fallback:
+                        print(f"{Colors.CYAN}  ℹ Usando espeak-ng para el resto de la sesión{Colors.NC}")
+                        self.using_fallback = True
+                    if self._generate_with_espeak(text, rate, output_file):
+                        return True
+                    else:
+                        print(f"{Colors.RED}  ✗ espeak-ng no está disponible{Colors.NC}")
+                        return False
 
                 # Reintentar hasta 3 veces con backoff exponencial
                 max_retries = 3
@@ -283,10 +436,33 @@ class TTSEngine:
                         if temp_mp3.exists():
                             temp_mp3.unlink()
 
+                        # Éxito: resetear contador de fallos
+                        self.gtts_consecutive_failures = 0
                         return output_file.exists()
 
                     except Exception as e:
                         error_msg = str(e)
+
+                        # Incrementar contador de fallos
+                        self.gtts_consecutive_failures += 1
+
+                        # Detectar errores que requieren cambio permanente a espeak-ng
+                        is_rate_limit = "429" in error_msg or "Too Many Requests" in error_msg
+                        is_persistent_error = self.gtts_consecutive_failures >= 3
+
+                        if is_rate_limit:
+                            print(f"{Colors.RED}  ✗ Error 429: Google TTS bloqueó las peticiones (demasiadas solicitudes){Colors.NC}")
+                            print(f"{Colors.YELLOW}  🔄 Cambiando permanentemente a espeak-ng para esta sesión{Colors.NC}")
+                            self.gtts_permanently_disabled = True
+                            self.using_fallback = True
+
+                            if self._generate_with_espeak(text, rate, output_file):
+                                print(f"{Colors.GREEN}  ✓ Audio generado con espeak-ng{Colors.NC}")
+                                return True
+                            else:
+                                print(f"{Colors.RED}  ✗ espeak-ng no está disponible{Colors.NC}")
+                                print(f"{Colors.YELLOW}  Instala con: sudo apt-get install espeak-ng{Colors.NC}")
+                                return False
 
                         # Detectar tipo de error
                         if "Failed to connect" in error_msg or "Connection" in error_msg:
@@ -296,8 +472,15 @@ class TTSEngine:
                                 retry_delay *= 2  # Backoff exponencial
                                 continue
                             else:
-                                print(f"{Colors.RED}  ✗ gTTS falló después de {max_retries} intentos{Colors.NC}")
-                                print(f"{Colors.CYAN}  🔄 Intentando con espeak-ng (TTS offline)...{Colors.NC}")
+                                if is_persistent_error:
+                                    print(f"{Colors.RED}  ✗ gTTS falló 3 veces consecutivas{Colors.NC}")
+                                    print(f"{Colors.YELLOW}  🔄 Cambiando permanentemente a espeak-ng para esta sesión{Colors.NC}")
+                                    self.gtts_permanently_disabled = True
+                                    self.using_fallback = True
+                                else:
+                                    print(f"{Colors.RED}  ✗ gTTS falló después de {max_retries} intentos{Colors.NC}")
+                                    print(f"{Colors.CYAN}  🔄 Intentando con espeak-ng (TTS offline)...{Colors.NC}")
+
                                 # Intentar con espeak-ng como fallback
                                 if self._generate_with_espeak(text, rate, output_file):
                                     print(f"{Colors.GREEN}  ✓ Audio generado con espeak-ng{Colors.NC}")
@@ -314,8 +497,14 @@ class TTSEngine:
                                 retry_delay *= 2
                                 continue
                             else:
+                                if is_persistent_error:
+                                    print(f"{Colors.YELLOW}  🔄 Cambiando permanentemente a espeak-ng para esta sesión{Colors.NC}")
+                                    self.gtts_permanently_disabled = True
+                                    self.using_fallback = True
+                                else:
+                                    print(f"{Colors.CYAN}  🔄 Intentando con espeak-ng (TTS offline)...{Colors.NC}")
+
                                 # Intentar con espeak-ng como fallback
-                                print(f"{Colors.CYAN}  🔄 Intentando con espeak-ng (TTS offline)...{Colors.NC}")
                                 if self._generate_with_espeak(text, rate, output_file):
                                     print(f"{Colors.GREEN}  ✓ Audio generado con espeak-ng{Colors.NC}")
                                     return True
@@ -819,6 +1008,38 @@ def interactive_prompt():
         print(f"{Colors.RED}Error: {e}{Colors.NC}")
         sys.exit(1)
 
+def save_checkpoint(temp_dir: Path, srt_file: str, video_file: str,
+                   params: dict, last_subtitle_id: int, total_subtitles: int):
+    """Guarda el estado actual del procesamiento para poder reanudar"""
+    checkpoint_file = temp_dir / "checkpoint.json"
+
+    checkpoint_data = {
+        "srt_file": str(Path(srt_file).absolute()),
+        "video_file": str(Path(video_file).absolute()),
+        "parameters": params,
+        "last_subtitle_id": last_subtitle_id,
+        "total_subtitles": total_subtitles,
+        "timestamp": datetime.datetime.now().isoformat(),
+        "temp_dir": str(temp_dir.absolute())
+    }
+
+    with open(checkpoint_file, 'w', encoding='utf-8') as f:
+        json.dump(checkpoint_data, f, indent=2, ensure_ascii=False)
+
+def load_checkpoint(temp_dir: Path) -> Optional[dict]:
+    """Carga el checkpoint de una carpeta temporal"""
+    checkpoint_file = temp_dir / "checkpoint.json"
+
+    if not checkpoint_file.exists():
+        return None
+
+    try:
+        with open(checkpoint_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"{Colors.RED}Error cargando checkpoint: {e}{Colors.NC}")
+        return None
+
 def main():
     parser = argparse.ArgumentParser(
         description="Genera audio TTS sincronizado con video desde archivo SRT",
@@ -837,10 +1058,36 @@ def main():
                        help="Eliminar pausas >15min del video final")
     parser.add_argument("--only-remove-breaks", action="store_true",
                        help="SOLO eliminar pausas del video (sin TTS)")
+    parser.add_argument("--continue", dest="continue_from", type=str,
+                       help="Reanudar desde carpeta temporal (ej: temp_video_abc123)")
     parser.add_argument("-h", "--help", action="store_true",
                        help="Mostrar ayuda")
 
     args = parser.parse_args()
+
+    # Si se especifica --continue, cargar checkpoint y reanudar
+    if args.continue_from:
+        temp_dir_path = Path(args.continue_from)
+        if not temp_dir_path.exists():
+            print(f"{Colors.RED}Error: Carpeta temporal no existe: {temp_dir_path}{Colors.NC}")
+            sys.exit(1)
+
+        checkpoint = load_checkpoint(temp_dir_path)
+        if not checkpoint:
+            print(f"{Colors.RED}Error: No se encontró checkpoint en {temp_dir_path}{Colors.NC}")
+            sys.exit(1)
+
+        print(f"{Colors.GREEN}📂 Reanudando desde checkpoint{Colors.NC}")
+        print(f"{Colors.CYAN}   Carpeta: {temp_dir_path}{Colors.NC}")
+        print(f"{Colors.CYAN}   SRT: {Path(checkpoint['srt_file']).name}{Colors.NC}")
+        print(f"{Colors.CYAN}   Último subtítulo procesado: {checkpoint['last_subtitle_id']}/{checkpoint['total_subtitles']}{Colors.NC}")
+        print(f"{Colors.CYAN}   Guardado: {checkpoint['timestamp']}{Colors.NC}")
+
+        # Sobrescribir args con datos del checkpoint
+        args.srt_file = checkpoint['srt_file']
+        args.video = checkpoint['video_file']
+        for key, value in checkpoint['parameters'].items():
+            setattr(args, key, value)
 
     # Si se pide ayuda o no hay parámetros, mostrar uso y prompt
     if args.help or (not args.srt_file and not args.video):
@@ -934,14 +1181,35 @@ def main():
     print(f"{Colors.GREEN}✅ SRT de trabajo generado: {working_srt}{Colors.NC}")
     print(f"{Colors.CYAN}   (IDs renumerados: 1-{len(subtitles)}){Colors.NC}")
 
-    # Crear directorio temporal en el directorio actual
+    # Crear o usar directorio temporal
     import datetime
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    temp_dir = Path.cwd() / f"temp_audio_{timestamp}"
-    temp_dir.mkdir(exist_ok=True)
+    import uuid
+
+    # Si estamos reanudando, usar la carpeta del checkpoint
+    if args.continue_from:
+        temp_dir = Path(args.continue_from)
+        checkpoint = load_checkpoint(temp_dir)
+        last_processed_id = checkpoint['last_subtitle_id']
+        print(f"{Colors.GREEN}♻️  Reanudando desde subtítulo {last_processed_id + 1}{Colors.NC}")
+    else:
+        # Crear directorio temporal con nombre descriptivo
+        srt_base_name = Path(args.srt_file).stem
+        random_code = str(uuid.uuid4())[:8]
+        temp_dir = Path.cwd() / f"temp_{srt_base_name}_{random_code}"
+        temp_dir.mkdir(exist_ok=True)
+        last_processed_id = 0
+        print(f"{Colors.GREEN}Carpeta temporal: {temp_dir}{Colors.NC}")
+
     logs_dir = temp_dir / "logs"
     logs_dir.mkdir(exist_ok=True)
-    print(f"{Colors.GREEN}Carpeta temporal: {temp_dir}{Colors.NC}")
+
+    # Preparar parámetros para checkpoint
+    checkpoint_params = {
+        'test': args.test,
+        'solo_audio': args.solo_audio,
+        'no_freeze': args.no_freeze,
+        'remove_breaks': args.remove_breaks
+    }
 
     # PASO 2: Generar audios con ajuste inteligente
     print(f"{Colors.BLUE}{'═' * 50}{Colors.NC}")
@@ -954,7 +1222,26 @@ def main():
     learning_phase = True
     processed_count = 0
 
+    srt_filename = Path(args.srt_file).name
+
     for idx, subtitle in enumerate(subtitles):
+        # Skip already processed subtitles when resuming
+        if subtitle.consecutive_id <= last_processed_id:
+            print(f"{Colors.CYAN}⏭️  Saltando subtítulo {subtitle.consecutive_id}/{len(subtitles)} (ya procesado){Colors.NC}")
+            # Still load the audio segment for final processing
+            audio_file = temp_dir / f"{subtitle.consecutive_id}.wav"
+            if audio_file.exists():
+                # Determine if it needs freeze or was truncated from existing data
+                # For now, assume basic AudioSegment (will be correct in final video)
+                audio_segments[subtitle.consecutive_id] = AudioSegment(
+                    subtitle_id=subtitle.consecutive_id,
+                    audio_file=audio_file,
+                    rate=180,  # Default, actual rate doesn't matter for skipped
+                    needs_freeze=False,
+                    was_truncated=False
+                )
+            continue
+
         # Limpiar texto HTML
         clean_text = re.sub(r'<[^>]*>', '', subtitle.text)
 
@@ -966,8 +1253,8 @@ def main():
             available_time = subtitle.duration
 
         print(f"{Colors.YELLOW}{'━' * 50}{Colors.NC}")
-        print(f"{Colors.YELLOW}Subtítulo {subtitle.consecutive_id} "
-              f"{Colors.CYAN}(ID original: {subtitle.original_id}){Colors.NC}")
+        print(f"{Colors.YELLOW}📄 {srt_filename} - Subtítulo {subtitle.consecutive_id}/{len(subtitles)}{Colors.NC}")
+        print(f"{Colors.CYAN}  (ID original: {subtitle.original_id}){Colors.NC}")
         print(f"{Colors.YELLOW}  Texto: {clean_text[:50]}...{Colors.NC}")
         print(f"{Colors.BLUE}  Duración subtítulo: {subtitle.duration:.3f}s{Colors.NC}")
         print(f"{Colors.BLUE}  Tiempo disponible: {available_time:.3f}s{Colors.NC}")
@@ -1063,6 +1350,12 @@ def main():
 
         processed_count += 1
 
+        # Save checkpoint every 10 subtitles
+        if subtitle.consecutive_id % 10 == 0:
+            save_checkpoint(temp_dir, args.srt_file, str(video_path),
+                           checkpoint_params, subtitle.consecutive_id, len(subtitles))
+            print(f"{Colors.GREEN}💾 Checkpoint guardado (subtítulo {subtitle.consecutive_id}/{len(subtitles)}){Colors.NC}")
+
         # Análisis de aprendizaje
         if processed_count == 50 and learning_phase:
             print(f"{Colors.MAGENTA}{'━' * 50}{Colors.NC}")
@@ -1083,6 +1376,12 @@ def main():
             learning_phase = False
             print(f"{Colors.GREEN}🎯 Rate óptimo determinado: {optimal_rate} wpm{Colors.NC}")
             print(f"{Colors.MAGENTA}{'━' * 50}{Colors.NC}")
+
+    # Save final checkpoint
+    if subtitles:
+        save_checkpoint(temp_dir, args.srt_file, str(video_path),
+                       checkpoint_params, subtitles[-1].consecutive_id, len(subtitles))
+        print(f"{Colors.GREEN}💾 Checkpoint final guardado{Colors.NC}")
 
     print(f"{Colors.GREEN}✅ Audios generados{Colors.NC}")
 
@@ -1497,7 +1796,13 @@ def main():
 
         output_video = None
     else:
-        output_video = video_path.with_suffix('').with_name(f"{video_path.stem}_con_tts.mkv")
+        # Generar nombre base y obtener nombre único si ya existe
+        base_output = video_path.with_suffix('').with_name(f"{video_path.stem}_con_tts.mkv")
+        output_video = get_unique_output_path(base_output)
+
+        if output_video != base_output:
+            print(f"{Colors.YELLOW}⚠ El archivo {base_output.name} ya existe{Colors.NC}")
+            print(f"{Colors.CYAN}ℹ Generando nuevo archivo: {output_video.name}{Colors.NC}")
 
         try:
             result = subprocess.run(
@@ -1627,9 +1932,15 @@ def main():
                     for seg in segment_files:
                         f.write(f"file '{seg}'\n")
 
-                output_video_clean = video_path.with_suffix('').with_name(
+                # Generar nombre base y obtener nombre único si ya existe
+                base_clean_output = video_path.with_suffix('').with_name(
                     f"{video_path.stem}_clean_breaks.mkv"
                 )
+                output_video_clean = get_unique_output_path(base_clean_output)
+
+                if output_video_clean != base_clean_output:
+                    print(f"{Colors.YELLOW}⚠ El archivo {base_clean_output.name} ya existe{Colors.NC}")
+                    print(f"{Colors.CYAN}ℹ Generando nuevo archivo: {output_video_clean.name}{Colors.NC}")
 
                 try:
                     subprocess.run(
