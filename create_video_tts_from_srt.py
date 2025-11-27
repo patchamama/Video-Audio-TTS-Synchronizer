@@ -172,6 +172,9 @@ class TTSEngine:
 
     def __init__(self):
         self.method = self._detect_method()
+        self.gtts_consecutive_failures = 0
+        self.gtts_permanently_disabled = False
+        self.using_fallback = False
 
     def _detect_method(self) -> str:
         """Detecta el método TTS disponible"""
@@ -344,6 +347,17 @@ class TTSEngine:
                 from pydub.effects import speedup
                 import time
 
+                # Si gTTS fue deshabilitado permanentemente, usar espeak-ng directamente
+                if self.gtts_permanently_disabled:
+                    if not self.using_fallback:
+                        print(f"{Colors.CYAN}  ℹ Usando espeak-ng para el resto de la sesión{Colors.NC}")
+                        self.using_fallback = True
+                    if self._generate_with_espeak(text, rate, output_file):
+                        return True
+                    else:
+                        print(f"{Colors.RED}  ✗ espeak-ng no está disponible{Colors.NC}")
+                        return False
+
                 # Reintentar hasta 3 veces con backoff exponencial
                 max_retries = 3
                 retry_delay = 1.0
@@ -380,10 +394,33 @@ class TTSEngine:
                         if temp_mp3.exists():
                             temp_mp3.unlink()
 
+                        # Éxito: resetear contador de fallos
+                        self.gtts_consecutive_failures = 0
                         return output_file.exists()
 
                     except Exception as e:
                         error_msg = str(e)
+
+                        # Incrementar contador de fallos
+                        self.gtts_consecutive_failures += 1
+
+                        # Detectar errores que requieren cambio permanente a espeak-ng
+                        is_rate_limit = "429" in error_msg or "Too Many Requests" in error_msg
+                        is_persistent_error = self.gtts_consecutive_failures >= 3
+
+                        if is_rate_limit:
+                            print(f"{Colors.RED}  ✗ Error 429: Google TTS bloqueó las peticiones (demasiadas solicitudes){Colors.NC}")
+                            print(f"{Colors.YELLOW}  🔄 Cambiando permanentemente a espeak-ng para esta sesión{Colors.NC}")
+                            self.gtts_permanently_disabled = True
+                            self.using_fallback = True
+
+                            if self._generate_with_espeak(text, rate, output_file):
+                                print(f"{Colors.GREEN}  ✓ Audio generado con espeak-ng{Colors.NC}")
+                                return True
+                            else:
+                                print(f"{Colors.RED}  ✗ espeak-ng no está disponible{Colors.NC}")
+                                print(f"{Colors.YELLOW}  Instala con: sudo apt-get install espeak-ng{Colors.NC}")
+                                return False
 
                         # Detectar tipo de error
                         if "Failed to connect" in error_msg or "Connection" in error_msg:
@@ -393,8 +430,15 @@ class TTSEngine:
                                 retry_delay *= 2  # Backoff exponencial
                                 continue
                             else:
-                                print(f"{Colors.RED}  ✗ gTTS falló después de {max_retries} intentos{Colors.NC}")
-                                print(f"{Colors.CYAN}  🔄 Intentando con espeak-ng (TTS offline)...{Colors.NC}")
+                                if is_persistent_error:
+                                    print(f"{Colors.RED}  ✗ gTTS falló 3 veces consecutivas{Colors.NC}")
+                                    print(f"{Colors.YELLOW}  🔄 Cambiando permanentemente a espeak-ng para esta sesión{Colors.NC}")
+                                    self.gtts_permanently_disabled = True
+                                    self.using_fallback = True
+                                else:
+                                    print(f"{Colors.RED}  ✗ gTTS falló después de {max_retries} intentos{Colors.NC}")
+                                    print(f"{Colors.CYAN}  🔄 Intentando con espeak-ng (TTS offline)...{Colors.NC}")
+
                                 # Intentar con espeak-ng como fallback
                                 if self._generate_with_espeak(text, rate, output_file):
                                     print(f"{Colors.GREEN}  ✓ Audio generado con espeak-ng{Colors.NC}")
@@ -411,8 +455,14 @@ class TTSEngine:
                                 retry_delay *= 2
                                 continue
                             else:
+                                if is_persistent_error:
+                                    print(f"{Colors.YELLOW}  🔄 Cambiando permanentemente a espeak-ng para esta sesión{Colors.NC}")
+                                    self.gtts_permanently_disabled = True
+                                    self.using_fallback = True
+                                else:
+                                    print(f"{Colors.CYAN}  🔄 Intentando con espeak-ng (TTS offline)...{Colors.NC}")
+
                                 # Intentar con espeak-ng como fallback
-                                print(f"{Colors.CYAN}  🔄 Intentando con espeak-ng (TTS offline)...{Colors.NC}")
                                 if self._generate_with_espeak(text, rate, output_file):
                                     print(f"{Colors.GREEN}  ✓ Audio generado con espeak-ng{Colors.NC}")
                                     return True
