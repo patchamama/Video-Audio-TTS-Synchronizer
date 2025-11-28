@@ -1765,7 +1765,8 @@ def main():
         print(f"{Colors.CYAN}Modo no-freeze: Usando video original{Colors.NC}")
     else:
         if freeze_count > 0:
-            print(f"{Colors.YELLOW}Procesando video con freezes...{Colors.NC}")
+            print(f"{Colors.YELLOW}Procesando video con freezes (optimizado)...{Colors.NC}")
+            print(f"{Colors.CYAN}ℹ️  {freeze_count} segmentos necesitan freeze{Colors.NC}")
 
             # Obtener FPS del video
             try:
@@ -1788,93 +1789,158 @@ def main():
 
             print(f"{Colors.GREEN}FPS: {fps:.2f}{Colors.NC}")
 
-            video_segments = []
+            # Agrupar subtítulos en bloques (bloques sin freeze vs. individuales con freeze)
+            blocks = []
+            current_block = {
+                'type': 'normal',  # 'normal' o 'freeze'
+                'start_time': None,
+                'end_time': None,
+                'subtitles': []
+            }
 
             for subtitle in subtitles:
                 segment = audio_segments.get(subtitle.consecutive_id)
                 if not segment:
                     continue
 
-                print(f"{Colors.YELLOW}Segmento {subtitle.consecutive_id}/{len(subtitles)} "
-                      f"({subtitle.start_seconds:.3f}s, {subtitle.duration:.3f}s){Colors.NC}")
-
-                seg_file = temp_dir / f"vseg_{subtitle.consecutive_id}.mkv"
-
-                # Extraer segmento de video
-                try:
-                    subprocess.run(
-                        ["ffmpeg", "-i", str(video_path),
-                         "-ss", str(subtitle.start_seconds),
-                         "-t", str(subtitle.duration),
-                         "-c:v", "libx264", "-preset", "ultrafast", "-an",
-                         str(seg_file), "-y"],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        text=True,
-                        check=True
-                    )
-
-                    if seg_file.exists() and seg_file.stat().st_size > 0:
-                        print(f"  {Colors.GREEN}✓ Segmento creado{Colors.NC}")
-                        video_segments.append(seg_file)
-                    else:
-                        print(f"  {Colors.RED}✗ Error: segmento vacío{Colors.NC}")
-                        error_logger.add_warning(f"Subtítulo {subtitle.consecutive_id}: Segmento de video vacío")
-                        continue
-
-                except subprocess.CalledProcessError as e:
-                    error_logger.add_error(
-                        f"PASO 4: Extraer segmento de video (subtítulo {subtitle.consecutive_id})",
-                        ' '.join(e.cmd),
-                        e.stderr or "Error extrayendo segmento de video"
-                    )
-                    print(f"  {Colors.RED}✗ Error creando segmento{Colors.NC}")
-                    continue
-
-                # Crear freeze si es necesario
                 if segment.needs_freeze:
-                    freeze_dur = segment.freeze_duration
-                    print(f"  {Colors.YELLOW}+ Creando freeze de {freeze_dur:.3f}s...{Colors.NC}")
+                    # Finalizar bloque actual si existe
+                    if current_block['subtitles']:
+                        blocks.append(current_block)
+                        current_block = {'type': 'normal', 'start_time': None, 'end_time': None, 'subtitles': []}
 
-                    frame_file = temp_dir / f"freeze_{subtitle.consecutive_id}.png"
-                    freeze_file = temp_dir / f"vfreeze_{subtitle.consecutive_id}.mkv"
+                    # Agregar bloque individual con freeze
+                    blocks.append({
+                        'type': 'freeze',
+                        'start_time': subtitle.start_seconds,
+                        'end_time': subtitle.start_seconds + subtitle.duration,
+                        'subtitles': [subtitle],
+                        'freeze_duration': segment.freeze_duration,
+                        'segment': segment
+                    })
+                else:
+                    # Agregar al bloque normal actual
+                    if not current_block['subtitles']:
+                        current_block['start_time'] = subtitle.start_seconds
+
+                    current_block['end_time'] = subtitle.start_seconds + subtitle.duration
+                    current_block['subtitles'].append(subtitle)
+
+            # Agregar último bloque si existe
+            if current_block['subtitles']:
+                blocks.append(current_block)
+
+            print(f"{Colors.GREEN}Bloques optimizados: {len(blocks)} (antes: {len(subtitles)} segmentos){Colors.NC}")
+
+            # Procesar bloques
+            video_segments = []
+            for idx, block in enumerate(blocks):
+                if block['type'] == 'normal':
+                    # Extraer un solo segmento grande para todos los subtítulos del bloque
+                    duration = block['end_time'] - block['start_time']
+                    seg_file = temp_dir / f"vblock_{idx}.mkv"
+
+                    print(f"{Colors.YELLOW}Bloque {idx+1}/{len(blocks)}: Normal "
+                          f"({block['start_time']:.1f}s - {block['end_time']:.1f}s, "
+                          f"{len(block['subtitles'])} subtítulos){Colors.NC}")
 
                     try:
-                        # Extraer último frame
                         subprocess.run(
-                            ["ffmpeg", "-sseof", "-0.1", "-i", str(seg_file),
-                             "-frames:v", "1", str(frame_file), "-y"],
+                            ["ffmpeg", "-i", str(video_path),
+                             "-ss", str(block['start_time']),
+                             "-t", str(duration),
+                             "-c:v", "libx264", "-preset", "ultrafast", "-an",
+                             str(seg_file), "-y"],
                             stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE,
                             text=True,
                             check=True
                         )
 
-                        if frame_file.exists() and frame_file.stat().st_size > 0:
-                            # Crear video de freeze
+                        if seg_file.exists() and seg_file.stat().st_size > 0:
+                            video_segments.append(seg_file)
+                            print(f"  {Colors.GREEN}✓ Bloque creado{Colors.NC}")
+                        else:
+                            print(f"  {Colors.RED}✗ Error: bloque vacío{Colors.NC}")
+                            error_logger.add_warning(f"Bloque {idx}: Segmento vacío")
+
+                    except subprocess.CalledProcessError as e:
+                        error_logger.add_error(
+                            f"PASO 4: Extraer bloque {idx}",
+                            ' '.join(e.cmd),
+                            e.stderr or "Error extrayendo bloque"
+                        )
+                        print(f"  {Colors.RED}✗ Error creando bloque{Colors.NC}")
+
+                else:  # block['type'] == 'freeze'
+                    subtitle = block['subtitles'][0]
+                    seg_file = temp_dir / f"vseg_{subtitle.consecutive_id}.mkv"
+
+                    print(f"{Colors.YELLOW}Bloque {idx+1}/{len(blocks)}: Freeze "
+                          f"(subtítulo {subtitle.consecutive_id}, "
+                          f"+{block['freeze_duration']:.1f}s freeze){Colors.NC}")
+
+                    try:
+                        # Extraer segmento original
+                        subprocess.run(
+                            ["ffmpeg", "-i", str(video_path),
+                             "-ss", str(subtitle.start_seconds),
+                             "-t", str(subtitle.duration),
+                             "-c:v", "libx264", "-preset", "ultrafast", "-an",
+                             str(seg_file), "-y"],
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True,
+                            check=True
+                        )
+
+                        if seg_file.exists() and seg_file.stat().st_size > 0:
+                            video_segments.append(seg_file)
+                            print(f"  {Colors.GREEN}✓ Segmento creado{Colors.NC}")
+
+                            # Crear freeze
+                            freeze_dur = block['freeze_duration']
+                            frame_file = temp_dir / f"freeze_{subtitle.consecutive_id}.png"
+                            freeze_file = temp_dir / f"vfreeze_{subtitle.consecutive_id}.mkv"
+
+                            # Extraer último frame
                             subprocess.run(
-                                ["ffmpeg", "-loop", "1", "-i", str(frame_file),
-                                 "-t", str(freeze_dur), "-r", str(fps),
-                                 "-pix_fmt", "yuv420p", "-c:v", "libx264",
-                                 "-preset", "ultrafast", str(freeze_file), "-y"],
+                                ["ffmpeg", "-sseof", "-0.1", "-i", str(seg_file),
+                                 "-frames:v", "1", str(frame_file), "-y"],
                                 stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE,
                                 text=True,
                                 check=True
                             )
 
-                            if freeze_file.exists() and freeze_file.stat().st_size > 0:
-                                video_segments.append(freeze_file)
-                                error_logger.add_warning(f"Subtítulo {subtitle.consecutive_id}: Freeze frame de {freeze_dur:.3f}s agregado")
-                                print(f"  {Colors.GREEN}✓ Freeze creado{Colors.NC}")
+                            if frame_file.exists() and frame_file.stat().st_size > 0:
+                                # Crear video de freeze
+                                subprocess.run(
+                                    ["ffmpeg", "-loop", "1", "-i", str(frame_file),
+                                     "-t", str(freeze_dur), "-r", str(fps),
+                                     "-pix_fmt", "yuv420p", "-c:v", "libx264",
+                                     "-preset", "ultrafast", str(freeze_file), "-y"],
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE,
+                                    text=True,
+                                    check=True
+                                )
+
+                                if freeze_file.exists() and freeze_file.stat().st_size > 0:
+                                    video_segments.append(freeze_file)
+                                    error_logger.add_warning(f"Subtítulo {subtitle.consecutive_id}: Freeze frame de {freeze_dur:.3f}s agregado")
+                                    print(f"  {Colors.GREEN}✓ Freeze creado{Colors.NC}")
+
+                        else:
+                            print(f"  {Colors.RED}✗ Error: segmento vacío{Colors.NC}")
 
                     except subprocess.CalledProcessError as e:
                         error_logger.add_error(
-                            f"PASO 4: Crear freeze frame (subtítulo {subtitle.consecutive_id})",
+                            f"PASO 4: Procesar segmento con freeze (subtítulo {subtitle.consecutive_id})",
                             ' '.join(e.cmd),
-                            e.stderr or "Error creando freeze frame"
+                            e.stderr or "Error procesando freeze"
                         )
-                        print(f"  {Colors.YELLOW}⚠ Error creando freeze{Colors.NC}")
+                        print(f"  {Colors.RED}✗ Error creando freeze{Colors.NC}")
 
             # Concatenar segmentos
             if video_segments:
