@@ -57,6 +57,7 @@ Este proyecto permite convertir archivos de subtítulos (SRT) en audio sincroniz
 **macOS:**
 ```bash
 brew install ffmpeg
+pip3 install yt-dlp  # Para integración con YouTube
 # El comando 'say' viene incluido en macOS
 ```
 
@@ -64,6 +65,7 @@ brew install ffmpeg
 ```bash
 sudo apt-get install ffmpeg python3
 sudo apt install python3-gtts python3-pydub espeak-ng  # espeak-ng es fallback offline
+pip install yt-dlp  # Para integración con YouTube
 ```
 
 **Windows:**
@@ -77,15 +79,21 @@ pip install edge-tts
 # Opción 2: pyttsx3 (offline, fallback)
 pip install pyttsx3
 
+# Para integración con YouTube
+pip install yt-dlp
+
 # Nota: El script detecta automáticamente el sistema y usa el motor apropiado
 ```
 
 ### Python
 
 - Python 3.7+
-- Dependencias (Linux):
-  - `python3-gtts` (desde repositorios apt)
-  - `python3-pydub` (desde repositorios apt)
+- Dependencias:
+  - **Linux**: `python3-gtts`, `python3-pydub` (desde repositorios apt)
+  - **Todas las plataformas**: `yt-dlp` (para descargar videos de YouTube)
+    ```bash
+    pip install yt-dlp
+    ```
 
 ## 🚀 Instalación
 
@@ -116,7 +124,8 @@ Esto descarga el script, instala dependencias y lo ejecuta en modo interactivo.
 wget https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/main/create_video_tts_from_srt.py
 
 # Instalar dependencias (Linux/Ubuntu)
-sudo apt-get install ffmpeg python3 python3-gtts python3-pydub
+sudo apt-get install ffmpeg python3 python3-gtts python3-pydub espeak-ng
+pip install yt-dlp
 
 # Dar permisos de ejecución
 chmod +x create_video_tts_from_srt.py
@@ -136,7 +145,8 @@ git clone https://github.com/patchamama/Video-Audio-TTS-Synchronizer.git
 cd Video-Audio-TTS-Synchronizer
 
 # Instalar dependencias (Linux)
-sudo apt install python3-gtts python3-pydub
+sudo apt install python3-gtts python3-pydub espeak-ng
+pip install yt-dlp
 
 # Verificar ffmpeg
 ffmpeg -version
