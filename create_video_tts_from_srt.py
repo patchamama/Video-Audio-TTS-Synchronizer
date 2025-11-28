@@ -2007,7 +2007,7 @@ def main():
             continue
 
         print(f"{Colors.YELLOW}{'━' * 50}{Colors.NC}")
-        print(f"{Colors.YELLOW}Subtítulo {subtitle.consecutive_id} "
+        print(f"{Colors.YELLOW}Subtítulo {subtitle.consecutive_id}/{len(subtitles)} "
               f"(inicio: {subtitle.start_seconds:.3f}s){Colors.NC}")
 
         # Verificar duración actual del audio master
