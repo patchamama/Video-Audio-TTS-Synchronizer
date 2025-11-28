@@ -79,12 +79,15 @@ Versión Python - Más fácil de debuguear y mantener que bash
 """
 
 import argparse
+import datetime
+import json
 import os
 import platform
 import re
 import subprocess
 import sys
 import tempfile
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
