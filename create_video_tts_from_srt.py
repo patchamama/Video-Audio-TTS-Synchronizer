@@ -58,11 +58,11 @@ Linux/Otros:
 ARCHIVOS GENERADOS
 ==================
 
-- {video}_working.srt     : Subtítulos con IDs renumerados consecutivamente
-- {video}_debug.srt       : Subtítulos con metadatos de TTS (rate, offsets, truncados)
-- {video}_con_tts.mkv     : Video final con audio TTS sincronizado
-- {video}_sin_pausas.mkv  : Video final sin pausas largas (si se usa --remove-breaks)
-- temp_audio_YYYYMMDD_HHMMSS/ : Carpeta temporal en directorio actual (conservada en modo --test)
+- {video}_working.srt         : Subtítulos con IDs renumerados consecutivamente
+- {video}_debug.srt           : Subtítulos con metadatos de TTS (rate, offsets, truncados)
+- {video}_{tts}_{os}.mkv      : Video final con audio TTS sincronizado (ej: video_gtts_Linux.mkv)
+- {video}_{tts}_{os}_sin_pausas.mkv : Video final sin pausas largas (si se usa --remove-breaks)
+- temp_{srt-name}_{code}/     : Carpeta temporal con checkpoints (conservada en modo --test)
 
 PROCESO
 =======
@@ -220,6 +220,20 @@ class TTSEngine:
         self.gtts_consecutive_failures = 0
         self.gtts_permanently_disabled = False
         self.using_fallback = False
+        self.last_tts_used = None  # Rastrear el TTS realmente usado
+
+    def get_tts_name(self) -> str:
+        """Devuelve el nombre del TTS usado para el nombre del archivo"""
+        if self.last_tts_used:
+            return self.last_tts_used
+        # Fallback si no se ha usado ningún TTS aún
+        if self.method == "say":
+            return "say"
+        elif self.method == "windows":
+            return "edge-tts"
+        elif self.method == "linux":
+            return "gtts" if not self.gtts_permanently_disabled else "espeak-ng"
+        return "tts"
 
     def _detect_method(self) -> str:
         """Detecta el método TTS disponible"""
@@ -267,7 +281,10 @@ class TTSEngine:
                 check=True
             )
 
-            return output_file.exists()
+            if output_file.exists():
+                self.last_tts_used = "espeak-ng"
+                return True
+            return False
 
         except subprocess.CalledProcessError as e:
             return False
@@ -310,7 +327,9 @@ class TTSEngine:
                     stderr=subprocess.DEVNULL
                 )
                 temp_mp3.unlink()
-                return output_file.exists()
+                if output_file.exists():
+                    self.last_tts_used = "edge-tts"
+                    return True
 
             return False
 
@@ -340,7 +359,10 @@ class TTSEngine:
             engine.save_to_file(text, str(output_file))
             engine.runAndWait()
 
-            return output_file.exists()
+            if output_file.exists():
+                self.last_tts_used = "sapi"
+                return True
+            return False
 
         except ImportError:
             return False
@@ -365,6 +387,7 @@ class TTSEngine:
                     stderr=subprocess.DEVNULL
                 )
                 aiff_file.unlink()
+                self.last_tts_used = "say"
                 return True
 
             elif self.method == "windows":
@@ -441,7 +464,10 @@ class TTSEngine:
 
                         # Éxito: resetear contador de fallos
                         self.gtts_consecutive_failures = 0
-                        return output_file.exists()
+                        if output_file.exists():
+                            self.last_tts_used = "gtts"
+                            return True
+                        return False
 
                     except Exception as e:
                         error_msg = str(e)
@@ -1799,8 +1825,15 @@ def main():
 
         output_video = None
     else:
-        # Generar nombre base y obtener nombre único si ya existe
-        base_output = video_path.with_suffix('').with_name(f"{video_path.stem}_con_tts.mkv")
+        # Generar nombre base con TTS y SO usados
+        tts_name = tts_engine.get_tts_name()
+        os_name = platform.system()  # Darwin, Windows, Linux
+
+        # Normalizar nombre del SO para el archivo
+        if os_name == "Darwin":
+            os_name = "macOS"
+
+        base_output = video_path.with_suffix('').with_name(f"{video_path.stem}_{tts_name}_{os_name}.mkv")
         output_video = get_unique_output_path(base_output)
 
         if output_video != base_output:
@@ -1935,9 +1968,9 @@ def main():
                     for seg in segment_files:
                         f.write(f"file '{seg}'\n")
 
-                # Generar nombre base y obtener nombre único si ya existe
+                # Generar nombre base con TTS y SO usados, y sin pausas
                 base_clean_output = video_path.with_suffix('').with_name(
-                    f"{video_path.stem}_clean_breaks.mkv"
+                    f"{video_path.stem}_{tts_name}_{os_name}_sin_pausas.mkv"
                 )
                 output_video_clean = get_unique_output_path(base_clean_output)
 
