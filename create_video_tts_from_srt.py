@@ -1496,7 +1496,7 @@ def main():
                 if not segment:
                     continue
 
-                print(f"{Colors.YELLOW}Segmento {subtitle.consecutive_id} "
+                print(f"{Colors.YELLOW}Segmento {subtitle.consecutive_id}/{len(subtitles)} "
                       f"({subtitle.start_seconds:.3f}s, {subtitle.duration:.3f}s){Colors.NC}")
 
                 seg_file = temp_dir / f"vseg_{subtitle.consecutive_id}.mkv"
@@ -1894,7 +1894,7 @@ def main():
                 duration = end - start
 
                 if duration > 0.1:
-                    print(f"{Colors.YELLOW}  Extrayendo segmento {idx+1}: "
+                    print(f"{Colors.YELLOW}  Extrayendo segmento {idx+1}/{len(keep_segments)}: "
                           f"{start:.1f}s a {end:.1f}s ({duration:.1f}s){Colors.NC}")
 
                     seg_file = temp_dir / f"seg_{idx}.mkv"
