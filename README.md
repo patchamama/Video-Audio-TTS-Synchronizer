@@ -34,15 +34,20 @@ Este proyecto permite convertir archivos de subtítulos (SRT) en audio sincroniz
 - ✅ **Sincronización precisa**: Construye pista de audio master alineada con timestamps
 - ✅ **Eliminación de pausas**: Remueve gaps mayores a 15 minutos
 - ✅ **Multi-plataforma**: Compatible con macOS (say), Linux (gTTS + espeak-ng) y Windows (edge-tts + SAPI)
+- ✅ **Integración con YouTube**: Descarga automática de videos y subtítulos con yt-dlp
+- ✅ **Selección de idioma**: Elección interactiva o automática de subtítulos por idioma
+- ✅ **Sistema de checkpoint**: Resume procesamiento interrumpido desde donde se quedó
+- ✅ **Rate fijo**: Opción para usar velocidad de audio constante
+- ✅ **Nombres descriptivos**: Archivos de salida incluyen TTS usado, OS y configuración
 - ✅ **Modo test**: Procesar solo N subtítulos para pruebas rápidas
-- ✅ **Progreso visual**: Indicadores de progreso cada 100 subtítulos
+- ✅ **Progreso visual**: Indicadores de progreso cada 10 subtítulos
 - ✅ **SRT debug**: Genera archivo con metadatos de TTS para inspección
 - ✅ **Reutilización de audio**: Soporte para carpeta de audios pre-generados
 
 ### En Desarrollo
 
-- 🔄 Suite de testing automatizado
-- 🔄 Interfaz interactiva para parámetros
+- 🔄 Traducción automática de subtítulos
+- 🔄 Interfaz web interactiva
 - 🔄 Conversión de formatos de salida
 
 ## 📦 Requisitos
@@ -86,10 +91,21 @@ pip install pyttsx3
 
 ### Opción 1: One-Liner (¡Más rápido!)
 
-**Todo en una sola línea:**
+**Linux/Ubuntu:**
 ```bash
-wget -q https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/main/create_video_tts_from_srt.py && chmod +x create_video_tts_from_srt.py && sudo apt-get install -y ffmpeg python3 python3-gtts python3-pydub && python3 create_video_tts_from_srt.py
+wget -q https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/main/create_video_tts_from_srt.py && chmod +x create_video_tts_from_srt.py && sudo apt-get install -y ffmpeg python3 python3-gtts python3-pydub espeak-ng && pip install yt-dlp && python3 create_video_tts_from_srt.py
 ```
+
+**macOS:**
+```bash
+curl -O https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/main/create_video_tts_from_srt.py && chmod +x create_video_tts_from_srt.py && brew install ffmpeg && pip3 install yt-dlp && python3 create_video_tts_from_srt.py
+```
+
+**Windows (PowerShell como administrador):**
+```powershell
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/main/create_video_tts_from_srt.py" -OutFile "create_video_tts_from_srt.py"; pip install edge-tts pyttsx3 yt-dlp; python create_video_tts_from_srt.py
+```
+*Nota: Requiere Python y ffmpeg instalados previamente en Windows*
 
 Esto descarga el script, instala dependencias y lo ejecuta en modo interactivo.
 
@@ -206,6 +222,10 @@ python3 create_video_tts_from_srt.py <archivo.srt> <video.mp4> [opciones]
 | `--no-freeze` | Truncar en lugar de freeze | False |
 | `--remove-breaks` | Eliminar pausas >15min | False |
 | `--only-remove-breaks` | Solo eliminar pausas (sin TTS) | False |
+| `--youtube ID/URL` | Descargar video y subtítulos de YouTube | - |
+| `--lang CÓDIGO` | Idioma de subtítulos (es, en, de, etc.) | Interactivo |
+| `--fix-rate RATE` | Usar rate de audio fijo (ej: 180, 200) | 180 |
+| `--continue CARPETA` | Reanudar desde checkpoint | - |
 
 ### Ejemplos
 
@@ -262,6 +282,80 @@ python3 create_video_tts_from_srt.py mi_video.srt mi_video.mp4 ./temp_audio_xyz/
 ```
 
 **Uso:** Evita regenerar audios si ya los tienes.
+
+#### Caso 7: Descargar de YouTube (Modo Automático)
+
+```bash
+# Descarga video y subtítulos automáticamente
+python3 create_video_tts_from_srt.py --youtube dQw4w9WgXcQ
+
+# O usa URL completa
+python3 create_video_tts_from_srt.py --youtube "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+
+# Con idioma específico
+python3 create_video_tts_from_srt.py --youtube dQw4w9WgXcQ --lang es
+```
+
+**Resultado:** Descarga video, lista subtítulos disponibles, permite selección interactiva (o automática con --lang), y procesa todo.
+
+#### Caso 8: Rate fijo para velocidad constante
+
+```bash
+# Usa siempre 200 WPM (no prueba otros rates)
+python3 create_video_tts_from_srt.py mi_video.srt mi_video.mp4 --fix-rate 200
+
+# O usa rate por defecto (180 WPM)
+python3 create_video_tts_from_srt.py mi_video.srt mi_video.mp4 --fix-rate
+```
+
+**Uso:** Útil cuando quieres velocidad constante sin optimización automática.
+
+#### Caso 9: Reanudar procesamiento interrumpido
+
+```bash
+# Primera ejecución (se interrumpe en subtítulo 450)
+python3 create_video_tts_from_srt.py mi_video.srt mi_video.mp4
+# Ctrl+C o error...
+
+# Reanudar desde donde se quedó
+python3 create_video_tts_from_srt.py --continue temp_mi_video_abc123
+```
+
+**Resultado:** Continúa desde el último checkpoint guardado, salta subtítulos ya procesados.
+
+#### Caso 10: YouTube + Rate fijo + Test
+
+```bash
+# Descarga de YouTube, usa rate 220 constante, procesa solo 30 subtítulos
+python3 create_video_tts_from_srt.py --youtube dQw4w9WgXcQ --lang en --fix-rate 220 --test 30
+```
+
+**Uso:** Combina múltiples opciones para pruebas rápidas.
+
+## 📁 Estructura del Proyecto
+
+```
+Video-Audio-TTS-Synchronizer/
+├── create_video_tts_from_srt.py    # Script principal
+├── README.md                        # Documentación
+├── tests/                           # Scripts de testing
+│   ├── test_checkpoint_system.py
+│   ├── test_colors_platform.py
+│   ├── test_multiplatform_tts.py
+│   ├── linux/                       # Tests específicos Linux
+│   │   ├── test_gtts.py
+│   │   ├── test_tts_fallback.py
+│   │   └── ...
+│   └── windows/                     # Tests específicos Windows
+│       ├── test_windows_tts.py
+│       └── test_windows_tts.ps1
+└── examples/                        # Ejemplos de uso
+    ├── linux/
+    │   └── example_espeak_simple.py
+    └── windows/
+        ├── WINDOWS_TTS_GUIDE.md
+        └── windows_tts_oneliner.txt
+```
 
 ## 🧠 Algoritmos y Lógica
 
@@ -537,16 +631,36 @@ flowchart TD
 |---------|-------------|-----------|
 | `{video}_working.srt` | Subtítulos con IDs renumerados 1-N | Directorio de trabajo |
 | `{video}_debug.srt` | Subtítulos con metadatos TTS (rate, offsets, flags) | Directorio de trabajo |
-| `temp_audio_*/` | Carpeta temporal con audios individuales y master | Directorio actual de trabajo |
-| `temp_audio_*/logs/` | Logs de generación TTS | Dentro de temp_audio |
+| `temp_{srt-name}_{code}/` | Carpeta temporal con checkpoints y audios | Directorio actual de trabajo |
+| `temp_{srt-name}_{code}/checkpoint.json` | Estado del procesamiento (para resume) | Dentro de temp |
+| `youtube_{video_id}/` | Carpeta con video y subtítulos de YouTube | Directorio actual (si se usa --youtube) |
 
 ### Salida Final
 
-| Archivo | Descripción | Generado con |
-|---------|-------------|--------------|
-| `{video}_con_tts.mkv` | Video final con audio TTS sincronizado | Por defecto |
-| `{video}_sin_pausas.mkv` | Video sin pausas largas | `--remove-breaks` |
-| `audio_final.wav` | Audio master sincronizado | `--solo-audio` |
+El formato de nombres incluye información completa del procesamiento:
+
+**Formato:** `{video}_{tts}_{os}_{freeze}.mkv`
+
+| Archivo | Ejemplo | Descripción |
+|---------|---------|-------------|
+| Video principal | `video_gtts_Linux_freeze.mkv` | TTS usado, OS, y estado de freeze |
+| Sin pausas | `video_gtts_Linux_freeze_sin_pausas.mkv` | Con `--remove-breaks` |
+| Solo audio WAV | `video_tts_audio.wav` | Con `--solo-audio` |
+| Solo audio AAC | `video_tts_audio.aac` | Con `--solo-audio` |
+
+**Componentes del nombre:**
+- `{tts}`: Motor usado (say, gtts, espeak-ng, edge-tts, sapi)
+- `{os}`: Sistema operativo (macOS, Linux, Windows)
+- `{freeze}`: Estado de freeze (freeze / nofreeze)
+
+**Ejemplos reales:**
+```
+video_say_macOS_nofreeze.mkv              # macOS, sin freeze necesario
+video_gtts_Linux_freeze.mkv               # Linux, con freeze frames
+video_espeak-ng_Linux_nofreeze.mkv        # Linux, fallback espeak-ng
+video_edge-tts_Windows_freeze.mkv         # Windows, online TTS
+video_sapi_Windows_nofreeze_sin_pausas.mkv  # Windows, offline, sin pausas
+```
 
 ### Ejemplo de debug.srt
 

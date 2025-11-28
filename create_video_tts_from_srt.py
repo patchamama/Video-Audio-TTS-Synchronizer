@@ -1073,6 +1073,246 @@ def load_checkpoint(temp_dir: Path) -> Optional[dict]:
         print(f"{Colors.RED}Error cargando checkpoint: {e}{Colors.NC}")
         return None
 
+def extract_youtube_id(youtube_input: str) -> Optional[str]:
+    """Extrae el ID de YouTube de una URL o devuelve el ID si ya es un ID"""
+    # Si es un ID directo (11 caracteres alfanuméricos)
+    if len(youtube_input) == 11 and youtube_input.isalnum():
+        return youtube_input
+
+    # Patrones de URL de YouTube
+    patterns = [
+        r'(?:youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11})',
+        r'youtube\.com/embed/([a-zA-Z0-9_-]{11})',
+        r'youtube\.com/v/([a-zA-Z0-9_-]{11})'
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, youtube_input)
+        if match:
+            return match.group(1)
+
+    return None
+
+def list_youtube_subtitles(video_id: str) -> Optional[List[dict]]:
+    """Lista todos los subtítulos disponibles para un video de YouTube"""
+    try:
+        # Usar yt-dlp para obtener información del video
+        cmd = [
+            'yt-dlp',
+            '--list-subs',
+            '--skip-download',
+            f'https://www.youtube.com/watch?v={video_id}'
+        ]
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+
+        # Parsear la salida para obtener los idiomas disponibles
+        subtitles = []
+        lines = result.stdout.split('\n')
+        in_subs_section = False
+
+        for line in lines:
+            if 'Available subtitles' in line or 'Available automatic captions' in line:
+                in_subs_section = True
+                is_auto = 'automatic' in line
+                continue
+
+            if in_subs_section and line.strip():
+                # Formato típico: "en    English"
+                parts = line.split()
+                if len(parts) >= 2 and parts[0].isalpha():
+                    lang_code = parts[0]
+                    lang_name = ' '.join(parts[1:])
+                    subtitles.append({
+                        'lang_code': lang_code,
+                        'lang_name': lang_name,
+                        'auto_generated': is_auto
+                    })
+
+        return subtitles if subtitles else None
+
+    except subprocess.CalledProcessError as e:
+        print(f"{Colors.RED}Error listando subtítulos: {e.stderr}{Colors.NC}")
+        return None
+    except FileNotFoundError:
+        print(f"{Colors.RED}Error: yt-dlp no está instalado{Colors.NC}")
+        print(f"{Colors.YELLOW}Instala con: pip install yt-dlp{Colors.NC}")
+        return None
+
+def download_youtube_video(video_id: str, output_dir: Path) -> Optional[Path]:
+    """Descarga un video de YouTube en la mejor calidad disponible"""
+    try:
+        output_template = str(output_dir / f'{video_id}.%(ext)s')
+
+        cmd = [
+            'yt-dlp',
+            '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+            '--merge-output-format', 'mp4',
+            '-o', output_template,
+            f'https://www.youtube.com/watch?v={video_id}'
+        ]
+
+        print(f"{Colors.CYAN}Descargando video de YouTube...{Colors.NC}")
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+
+        # Buscar el archivo descargado
+        video_file = output_dir / f'{video_id}.mp4'
+        if video_file.exists():
+            print(f"{Colors.GREEN}✓ Video descargado: {video_file}{Colors.NC}")
+            return video_file
+
+        return None
+
+    except subprocess.CalledProcessError as e:
+        print(f"{Colors.RED}Error descargando video: {e.stderr}{Colors.NC}")
+        return None
+
+def download_youtube_subtitle(video_id: str, lang_code: str, output_dir: Path) -> Optional[Path]:
+    """Descarga un subtítulo específico de YouTube"""
+    try:
+        output_template = str(output_dir / f'{video_id}_{lang_code}.%(ext)s')
+
+        cmd = [
+            'yt-dlp',
+            '--write-sub',
+            '--write-auto-sub',
+            '--sub-lang', lang_code,
+            '--sub-format', 'srt',
+            '--skip-download',
+            '--convert-subs', 'srt',
+            '-o', output_template,
+            f'https://www.youtube.com/watch?v={video_id}'
+        ]
+
+        print(f"{Colors.CYAN}Descargando subtítulos en {lang_code}...{Colors.NC}")
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+
+        # Buscar el archivo de subtítulos descargado
+        srt_file = output_dir / f'{video_id}_{lang_code}.{lang_code}.srt'
+        if not srt_file.exists():
+            srt_file = output_dir / f'{video_id}_{lang_code}.srt'
+
+        if srt_file.exists():
+            print(f"{Colors.GREEN}✓ Subtítulos descargados: {srt_file}{Colors.NC}")
+            return srt_file
+
+        return None
+
+    except subprocess.CalledProcessError as e:
+        print(f"{Colors.RED}Error descargando subtítulos: {e.stderr}{Colors.NC}")
+        return None
+
+def select_subtitle_interactive(subtitles: List[dict], target_lang: Optional[str] = None) -> Optional[str]:
+    """Prompt interactivo para seleccionar un subtítulo"""
+    if not subtitles:
+        return None
+
+    # Si se especificó un idioma objetivo, buscar coincidencia
+    if target_lang:
+        for sub in subtitles:
+            if sub['lang_code'] == target_lang:
+                print(f"{Colors.GREEN}Subtítulo en {target_lang} seleccionado automáticamente{Colors.NC}")
+                return sub['lang_code']
+
+    # Mostrar lista de subtítulos disponibles
+    print(f"{Colors.YELLOW}{'═' * 60}{Colors.NC}")
+    print(f"{Colors.YELLOW}SUBTÍTULOS DISPONIBLES{Colors.NC}")
+    print(f"{Colors.YELLOW}{'═' * 60}{Colors.NC}")
+
+    for idx, sub in enumerate(subtitles, 1):
+        auto_tag = " (auto-generado)" if sub.get('auto_generated') else ""
+        print(f"{Colors.CYAN}{idx:2d}.{Colors.NC} {sub['lang_code']:5s} - {sub['lang_name']}{auto_tag}")
+
+    print(f"{Colors.YELLOW}{'═' * 60}{Colors.NC}")
+
+    # Solicitar selección
+    while True:
+        try:
+            choice = input(f"{Colors.GREEN}Selecciona el número del subtítulo a usar (o 'q' para salir): {Colors.NC}")
+
+            if choice.lower() == 'q':
+                return None
+
+            choice_num = int(choice)
+            if 1 <= choice_num <= len(subtitles):
+                selected = subtitles[choice_num - 1]
+                print(f"{Colors.GREEN}✓ Seleccionado: {selected['lang_code']} - {selected['lang_name']}{Colors.NC}")
+                return selected['lang_code']
+            else:
+                print(f"{Colors.RED}Opción inválida. Elige entre 1 y {len(subtitles)}{Colors.NC}")
+
+        except ValueError:
+            print(f"{Colors.RED}Entrada inválida. Ingresa un número o 'q'{Colors.NC}")
+        except KeyboardInterrupt:
+            print(f"\n{Colors.YELLOW}Operación cancelada{Colors.NC}")
+            return None
+
+def process_youtube_video(youtube_input: str, target_lang: Optional[str] = None) -> Tuple[Optional[Path], Optional[Path]]:
+    """
+    Procesa un video de YouTube: descarga video y subtítulos
+    Retorna (video_path, srt_path) o (None, None) si falla
+    """
+    # Extraer ID de YouTube
+    video_id = extract_youtube_id(youtube_input)
+    if not video_id:
+        print(f"{Colors.RED}Error: No se pudo extraer el ID de YouTube de: {youtube_input}{Colors.NC}")
+        return None, None
+
+    print(f"{Colors.GREEN}ID de YouTube: {video_id}{Colors.NC}")
+
+    # Crear carpeta temporal para descargas
+    download_dir = Path.cwd() / f"youtube_{video_id}"
+    download_dir.mkdir(exist_ok=True)
+
+    # Listar subtítulos disponibles
+    print(f"{Colors.CYAN}Obteniendo subtítulos disponibles...{Colors.NC}")
+    subtitles = list_youtube_subtitles(video_id)
+
+    if not subtitles:
+        print(f"{Colors.RED}No se encontraron subtítulos para este video{Colors.NC}")
+        return None, None
+
+    # Seleccionar subtítulo
+    selected_lang = select_subtitle_interactive(subtitles, target_lang)
+    if not selected_lang:
+        print(f"{Colors.YELLOW}No se seleccionó ningún subtítulo. Abortando.{Colors.NC}")
+        return None, None
+
+    # Descargar video
+    video_path = download_youtube_video(video_id, download_dir)
+    if not video_path:
+        print(f"{Colors.RED}Error descargando video{Colors.NC}")
+        return None, None
+
+    # Descargar subtítulos
+    srt_path = download_youtube_subtitle(video_id, selected_lang, download_dir)
+    if not srt_path:
+        print(f"{Colors.RED}Error descargando subtítulos{Colors.NC}")
+        return None, None
+
+    print(f"{Colors.GREEN}{'═' * 60}{Colors.NC}")
+    print(f"{Colors.GREEN}✓ Descarga completada{Colors.NC}")
+    print(f"{Colors.GREEN}  Video: {video_path}{Colors.NC}")
+    print(f"{Colors.GREEN}  Subtítulos: {srt_path}{Colors.NC}")
+    print(f"{Colors.GREEN}{'═' * 60}{Colors.NC}")
+
+    return video_path, srt_path
+
 def main():
     parser = argparse.ArgumentParser(
         description="Genera audio TTS sincronizado con video desde archivo SRT",
@@ -1093,6 +1333,12 @@ def main():
                        help="SOLO eliminar pausas del video (sin TTS)")
     parser.add_argument("--continue", dest="continue_from", type=str,
                        help="Reanudar desde carpeta temporal (ej: temp_video_abc123)")
+    parser.add_argument("--youtube", type=str,
+                       help="ID o URL de YouTube para descargar video y subtítulos")
+    parser.add_argument("--lang", type=str,
+                       help="Idioma de los subtítulos (es, en, de, etc.)")
+    parser.add_argument("--fix-rate", type=int, nargs="?", const=180,
+                       help="Usar rate de audio fijo (default: 180 si no se especifica valor)")
     parser.add_argument("-h", "--help", action="store_true",
                        help="Mostrar ayuda")
 
@@ -1122,8 +1368,27 @@ def main():
         for key, value in checkpoint['parameters'].items():
             setattr(args, key, value)
 
+    # Si se especifica --youtube, descargar video y subtítulos
+    if hasattr(args, 'youtube') and args.youtube:
+        print(f"{Colors.BLUE}{'═' * 60}{Colors.NC}")
+        print(f"{Colors.BLUE}📺 MODO YOUTUBE: Descargando video y subtítulos{Colors.NC}")
+        print(f"{Colors.BLUE}{'═' * 60}{Colors.NC}")
+
+        video_path, srt_path = process_youtube_video(
+            args.youtube,
+            args.lang if hasattr(args, 'lang') else None
+        )
+
+        if not video_path or not srt_path:
+            print(f"{Colors.RED}Error procesando video de YouTube{Colors.NC}")
+            sys.exit(1)
+
+        # Actualizar args con los archivos descargados
+        args.video = str(video_path)
+        args.srt_file = str(srt_path)
+
     # Si se pide ayuda o no hay parámetros, mostrar uso y prompt
-    if args.help or (not args.srt_file and not args.video):
+    if args.help or (not args.srt_file and not args.video and not (hasattr(args, 'youtube') and args.youtube)):
         interactive_args = show_usage_and_prompt()
         if interactive_args:
             # Re-parsear con los argumentos interactivos
@@ -1133,7 +1398,7 @@ def main():
 
     # Validar que se proporcionaron los argumentos requeridos
     if not args.srt_file or not args.video:
-        print(f"{Colors.RED}Error: Se requieren los parámetros srt_file y video{Colors.NC}")
+        print(f"{Colors.RED}Error: Se requieren los parámetros srt_file y video, o usar --youtube{Colors.NC}")
         sys.exit(1)
 
     # Inicializar logger de errores
@@ -1298,7 +1563,11 @@ def main():
             print(f"{Colors.MAGENTA}🎯 Usando rate aprendido: {current_rate} wpm{Colors.NC}")
 
         # Determinar rates a probar
-        if args.no_freeze or args.solo_audio:
+        if hasattr(args, 'fix_rate') and args.fix_rate:
+            # Si se especificó --fix-rate, usar solo ese rate
+            rate_list = [args.fix_rate]
+            print(f"{Colors.MAGENTA}🔒 Usando rate fijo: {args.fix_rate} wpm{Colors.NC}")
+        elif args.no_freeze or args.solo_audio:
             rate_list = [current_rate, 200, 220, 240]
         else:
             rate_list = [current_rate, 200, 220]
