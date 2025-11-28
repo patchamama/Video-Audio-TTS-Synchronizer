@@ -58,11 +58,15 @@ Linux/Otros:
 ARCHIVOS GENERADOS
 ==================
 
-- {video}_working.srt         : Subtítulos con IDs renumerados consecutivamente
-- {video}_debug.srt           : Subtítulos con metadatos de TTS (rate, offsets, truncados)
-- {video}_{tts}_{os}.mkv      : Video final con audio TTS sincronizado (ej: video_gtts_Linux.mkv)
-- {video}_{tts}_{os}_sin_pausas.mkv : Video final sin pausas largas (si se usa --remove-breaks)
-- temp_{srt-name}_{code}/     : Carpeta temporal con checkpoints (conservada en modo --test)
+- {video}_working.srt                           : Subtítulos con IDs renumerados consecutivamente
+- {video}_debug.srt                             : Subtítulos con metadatos de TTS
+- {video}_{tts}_{os}_{freeze}.mkv               : Video final (ej: video_gtts_Linux_freeze.mkv)
+- {video}_{tts}_{os}_{freeze}_sin_pausas.mkv    : Video sin pausas largas (--remove-breaks)
+- temp_{srt-name}_{code}/                       : Carpeta temporal con checkpoints
+
+Donde {freeze} puede ser:
+  - freeze   : Se usaron freeze frames para audios largos
+  - nofreeze : Se truncaron audios largos (--no-freeze) o no hubo audios largos
 
 PROCESO
 =======
@@ -1825,7 +1829,7 @@ def main():
 
         output_video = None
     else:
-        # Generar nombre base con TTS y SO usados
+        # Generar nombre base con TTS, SO y opciones usadas
         tts_name = tts_engine.get_tts_name()
         os_name = platform.system()  # Darwin, Windows, Linux
 
@@ -1833,7 +1837,17 @@ def main():
         if os_name == "Darwin":
             os_name = "macOS"
 
-        base_output = video_path.with_suffix('').with_name(f"{video_path.stem}_{tts_name}_{os_name}.mkv")
+        # Determinar si se usó freeze o no
+        if args.no_freeze or args.solo_audio:
+            freeze_status = "nofreeze"
+        else:
+            # Verificar si realmente se usó freeze en algún segmento
+            has_freeze = any(seg.needs_freeze for seg in audio_segments.values())
+            freeze_status = "freeze" if has_freeze else "nofreeze"
+
+        base_output = video_path.with_suffix('').with_name(
+            f"{video_path.stem}_{tts_name}_{os_name}_{freeze_status}.mkv"
+        )
         output_video = get_unique_output_path(base_output)
 
         if output_video != base_output:
@@ -1968,9 +1982,9 @@ def main():
                     for seg in segment_files:
                         f.write(f"file '{seg}'\n")
 
-                # Generar nombre base con TTS y SO usados, y sin pausas
+                # Generar nombre base con TTS, SO, freeze status y sin pausas
                 base_clean_output = video_path.with_suffix('').with_name(
-                    f"{video_path.stem}_{tts_name}_{os_name}_sin_pausas.mkv"
+                    f"{video_path.stem}_{tts_name}_{os_name}_{freeze_status}_sin_pausas.mkv"
                 )
                 output_video_clean = get_unique_output_path(base_clean_output)
 
