@@ -233,7 +233,7 @@ python3 create_video_tts_from_srt.py <archivo.srt> <video.mp4> [opciones]
 | `--remove-breaks` | Eliminar pausas >15min | False |
 | `--only-remove-breaks` | Solo eliminar pausas (sin TTS) | False |
 | `--youtube ID/URL` | Descargar video y subtítulos de YouTube | - |
-| `--lang CÓDIGO` | Idioma de subtítulos (es, en, de, etc.) | Interactivo |
+| `--lang CÓDIGO` | Idioma de subtítulos para TTS (es, en, de, fr, it, pt, ja, zh) | es |
 | `--fix-rate RATE` | Usar rate de audio fijo (ej: 180, 200) | 180 |
 | `--continue CARPETA` | Reanudar desde checkpoint | - |
 
@@ -284,7 +284,24 @@ python3 create_video_tts_from_srt.py mi_video.srt mi_video.mp4 --remove-breaks
 
 **Resultado:** `mi_video_sin_pausas.mkv`
 
-#### Caso 6: Reutilizar audios
+#### Caso 6: Multi-idioma TTS
+
+```bash
+# Genera audio en inglés
+python3 create_video_tts_from_srt.py mi_video_en.srt mi_video.mp4 --lang en
+
+# Genera audio en alemán
+python3 create_video_tts_from_srt.py mi_video_de.srt mi_video.mp4 --lang de
+
+# Genera audio en francés
+python3 create_video_tts_from_srt.py mi_video_fr.srt mi_video.mp4 --lang fr
+```
+
+**Uso:** El script selecciona automáticamente las voces TTS apropiadas para el idioma especificado en cada sistema operativo (macOS: Samantha para inglés, Anna para alemán; Windows: en-US-JennyNeural, de-DE-KatjaNeural; Linux: voces de gTTS/espeak-ng correspondientes).
+
+**Idiomas soportados:** es (español), en (inglés), de (alemán), fr (francés), it (italiano), pt (portugués), ja (japonés), zh (chino)
+
+#### Caso 7: Reutilizar audios
 
 ```bash
 # Usa audios previamente generados
@@ -293,7 +310,7 @@ python3 create_video_tts_from_srt.py mi_video.srt mi_video.mp4 ./temp_audio_xyz/
 
 **Uso:** Evita regenerar audios si ya los tienes.
 
-#### Caso 7: Descargar de YouTube (Modo Automático)
+#### Caso 8: Descargar de YouTube (Modo Automático)
 
 ```bash
 # Descarga video y subtítulos automáticamente
@@ -308,7 +325,7 @@ python3 create_video_tts_from_srt.py --youtube dQw4w9WgXcQ --lang es
 
 **Resultado:** Descarga video, lista subtítulos disponibles, permite selección interactiva (o automática con --lang), y procesa todo.
 
-#### Caso 8: Rate fijo para velocidad constante
+#### Caso 9: Rate fijo para velocidad constante
 
 ```bash
 # Usa siempre 200 WPM (no prueba otros rates)
@@ -320,7 +337,7 @@ python3 create_video_tts_from_srt.py mi_video.srt mi_video.mp4 --fix-rate
 
 **Uso:** Útil cuando quieres velocidad constante sin optimización automática.
 
-#### Caso 9: Reanudar procesamiento interrumpido
+#### Caso 10: Reanudar procesamiento interrumpido
 
 ```bash
 # Primera ejecución (se interrumpe en subtítulo 450)
@@ -333,7 +350,7 @@ python3 create_video_tts_from_srt.py --continue temp_mi_video_abc123
 
 **Resultado:** Continúa desde el último checkpoint guardado, salta subtítulos ya procesados.
 
-#### Caso 10: YouTube + Rate fijo + Test
+#### Caso 11: YouTube + Rate fijo + Test
 
 ```bash
 # Descarga de YouTube, usa rate 220 constante, procesa solo 30 subtítulos

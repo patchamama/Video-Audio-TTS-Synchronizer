@@ -219,12 +219,55 @@ def get_unique_output_path(base_path: Path) -> Path:
 class TTSEngine:
     """Maneja la generación de TTS"""
 
-    def __init__(self):
+    def __init__(self, language: str = 'es'):
+        self.language = language  # Idioma del TTS (es, en, de, fr, etc.)
         self.method = self._detect_method()
         self.gtts_consecutive_failures = 0
         self.gtts_permanently_disabled = False
         self.using_fallback = False
         self.last_tts_used = None  # Rastrear el TTS realmente usado
+        self._configure_voice()  # Configurar voz según idioma
+
+    def _configure_voice(self):
+        """Configura la voz según el idioma y el sistema operativo"""
+        # Mapeo de idiomas a voces según el sistema
+        self.voice_config = {
+            'say': {
+                'es': 'Paulina',    # Español (España/México)
+                'en': 'Samantha',   # Inglés (US)
+                'de': 'Anna',       # Alemán
+                'fr': 'Thomas',     # Francés
+                'it': 'Alice',      # Italiano
+                'pt': 'Luciana',    # Portugués
+                'ja': 'Kyoko',      # Japonés
+                'zh': 'Ting-Ting',  # Chino
+            },
+            'edge-tts': {
+                'es': 'es-ES-ElviraNeural',
+                'en': 'en-US-JennyNeural',
+                'de': 'de-DE-KatjaNeural',
+                'fr': 'fr-FR-DeniseNeural',
+                'it': 'it-IT-ElsaNeural',
+                'pt': 'pt-BR-FranciscaNeural',
+                'ja': 'ja-JP-NanamiNeural',
+                'zh': 'zh-CN-XiaoxiaoNeural',
+            },
+            'espeak': {
+                'es': 'es',
+                'en': 'en',
+                'de': 'de',
+                'fr': 'fr',
+                'it': 'it',
+                'pt': 'pt',
+                'ja': 'ja',
+                'zh': 'zh',
+            }
+        }
+
+        # Validar idioma y usar español por defecto si no está soportado
+        if self.language not in self.voice_config['espeak']:
+            print(f"{Colors.YELLOW}⚠️  Idioma '{self.language}' no soportado, usando 'es' por defecto{Colors.NC}")
+            self.language = 'es'
 
     def get_tts_name(self) -> str:
         """Devuelve el nombre del TTS usado para el nombre del archivo"""
@@ -270,9 +313,12 @@ class TTSEngine:
             if not shutil.which("espeak-ng"):
                 return False
 
+            # Obtener el código de voz configurado para el idioma
+            voice_code = self.voice_config['espeak'].get(self.language, 'es')
+
             cmd = [
                 'espeak-ng',
-                '-v', 'es',              # Voz en español
+                '-v', voice_code,        # Voz según idioma configurado
                 '-s', str(rate),         # Velocidad en WPM
                 '-w', str(output_file),  # Archivo de salida WAV
                 text                     # Texto a convertir
@@ -303,13 +349,14 @@ class TTSEngine:
             rate_percent = int(((rate - 180) / 180) * 100)
             rate_arg = f"+{rate_percent}%" if rate_percent >= 0 else f"{rate_percent}%"
 
-            # Generar MP3 primero con edge-tts
+            # Generar MP3 primero con edge-tts usando voz configurada
+            voice = self.voice_config['edge-tts'].get(self.language, 'es-ES-ElviraNeural')
             temp_mp3 = output_file.with_suffix('.mp3')
 
             cmd = [
                 sys.executable, '-m', 'edge_tts',
                 '--text', text,
-                '--voice', 'es-ES-ElviraNeural',
+                '--voice', voice,
                 '--rate', rate_arg,
                 '--write-media', str(temp_mp3)
             ]
@@ -349,12 +396,31 @@ class TTSEngine:
 
             engine = pyttsx3.init()
 
-            # Buscar voz en español
+            # Buscar voz en el idioma especificado
+            language_names = {
+                'es': ['spanish', 'español', 'es'],
+                'en': ['english', 'en'],
+                'de': ['german', 'deutsch', 'de'],
+                'fr': ['french', 'français', 'fr'],
+                'it': ['italian', 'italiano', 'it'],
+                'pt': ['portuguese', 'português', 'pt'],
+            }
+
+            search_terms = language_names.get(self.language, ['spanish', 'es'])
             voices = engine.getProperty('voices')
+            voice_found = False
+
             for voice in voices:
-                if 'spanish' in voice.name.lower() or 'es' in str(voice.languages).lower():
+                voice_lower = voice.name.lower()
+                lang_lower = str(voice.languages).lower()
+                if any(term in voice_lower or term in lang_lower for term in search_terms):
                     engine.setProperty('voice', voice.id)
+                    voice_found = True
                     break
+
+            if not voice_found and self.language != 'en':
+                # Si no se encuentra voz en el idioma, intentar inglés como fallback
+                print(f"{Colors.YELLOW}  ⚠️ No se encontró voz en '{self.language}', usando inglés{Colors.NC}")
 
             # Configurar velocidad (pyttsx3 usa WPM directamente)
             engine.setProperty('rate', rate)
@@ -377,10 +443,11 @@ class TTSEngine:
         """Genera audio TTS con el rate especificado"""
         try:
             if self.method == "say":
-                # macOS say command
+                # macOS say command con voz configurada según idioma
+                voice = self.voice_config['say'].get(self.language, 'Paulina')
                 aiff_file = output_file.with_suffix('.aiff')
                 subprocess.run(
-                    ["say", "-v", "Paulina", "-r", str(rate), text, "-o", str(aiff_file)],
+                    ["say", "-v", voice, "-r", str(rate), text, "-o", str(aiff_file)],
                     check=True,
                     stderr=subprocess.DEVNULL
                 )
@@ -437,7 +504,7 @@ class TTSEngine:
                 for attempt in range(max_retries):
                     try:
                         # Generar audio con gTTS
-                        tts = gTTS(text=text, lang='es', slow=False)
+                        tts = gTTS(text=text, lang=self.language, slow=False)
                         temp_mp3 = output_file.with_suffix('.mp3')
                         tts.save(str(temp_mp3))
 
@@ -1409,7 +1476,10 @@ def main():
     print(f"{Colors.BLUE}🔍 DETECTANDO MÉTODO TTS{Colors.NC}")
     print(f"{Colors.BLUE}{'═' * 50}{Colors.NC}")
 
-    tts_engine = TTSEngine()
+    # Obtener idioma desde argumentos (default: 'es')
+    language = args.lang if hasattr(args, 'lang') and args.lang else 'es'
+    tts_engine = TTSEngine(language=language)
+    print(f"{Colors.CYAN}🌍 Idioma configurado: {language}{Colors.NC}")
 
     # Verificar archivos
     srt_path = Path(args.srt_file)
@@ -1506,7 +1576,8 @@ def main():
         'test': args.test,
         'solo_audio': args.solo_audio,
         'no_freeze': args.no_freeze,
-        'remove_breaks': args.remove_breaks
+        'remove_breaks': args.remove_breaks,
+        'lang': language  # Guardar idioma en checkpoint
     }
 
     # PASO 2: Generar audios con ajuste inteligente
