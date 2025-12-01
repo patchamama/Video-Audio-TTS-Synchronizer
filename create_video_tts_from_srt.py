@@ -269,6 +269,16 @@ class TTSEngine:
             print(f"{Colors.YELLOW}⚠️  Idioma '{self.language}' no soportado, usando 'es' por defecto{Colors.NC}")
             self.language = 'es'
 
+        # Mostrar configuración de voz según el método
+        if self.method == "say":
+            voice = self.voice_config['say'].get(self.language, 'Paulina')
+            print(f"{Colors.CYAN}  🎙️  Voz seleccionada: {voice} ({self.language}){Colors.NC}")
+        elif self.method == "windows":
+            voice = self.voice_config['edge-tts'].get(self.language, 'es-ES-ElviraNeural')
+            print(f"{Colors.CYAN}  🎙️  Voz seleccionada: {voice} ({self.language}){Colors.NC}")
+        elif self.method == "linux":
+            print(f"{Colors.CYAN}  🎙️  Idioma de TTS: {self.language}{Colors.NC}")
+
     def get_tts_name(self) -> str:
         """Devuelve el nombre del TTS usado para el nombre del archivo"""
         if self.last_tts_used:
@@ -352,6 +362,11 @@ class TTSEngine:
             # Generar MP3 primero con edge-tts usando voz configurada
             voice = self.voice_config['edge-tts'].get(self.language, 'es-ES-ElviraNeural')
             temp_mp3 = output_file.with_suffix('.mp3')
+
+            # DEBUG: Mostrar voz usada (solo una vez por sesión)
+            if not hasattr(self, '_voice_logged'):
+                print(f"{Colors.CYAN}  🔍 DEBUG edge-tts: Usando voz '{voice}' (idioma: {self.language}){Colors.NC}")
+                self._voice_logged = True
 
             cmd = [
                 sys.executable, '-m', 'edge_tts',
@@ -1477,9 +1492,10 @@ def main():
     print(f"{Colors.BLUE}{'═' * 50}{Colors.NC}")
 
     # Obtener idioma desde argumentos (default: 'es')
+    print(f"{Colors.CYAN}🔍 DEBUG: args.lang = {args.lang if hasattr(args, 'lang') else 'NO DEFINIDO'}{Colors.NC}")
     language = args.lang if hasattr(args, 'lang') and args.lang else 'es'
-    tts_engine = TTSEngine(language=language)
     print(f"{Colors.CYAN}🌍 Idioma configurado: {language}{Colors.NC}")
+    tts_engine = TTSEngine(language=language)
 
     # Verificar archivos
     srt_path = Path(args.srt_file)
