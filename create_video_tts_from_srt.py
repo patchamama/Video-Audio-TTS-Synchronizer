@@ -219,12 +219,65 @@ def get_unique_output_path(base_path: Path) -> Path:
 class TTSEngine:
     """Maneja la generación de TTS"""
 
-    def __init__(self):
+    def __init__(self, language: str = 'es'):
+        self.language = language  # Idioma del TTS (es, en, de, fr, etc.)
         self.method = self._detect_method()
         self.gtts_consecutive_failures = 0
         self.gtts_permanently_disabled = False
         self.using_fallback = False
         self.last_tts_used = None  # Rastrear el TTS realmente usado
+        self._configure_voice()  # Configurar voz según idioma
+
+    def _configure_voice(self):
+        """Configura la voz según el idioma y el sistema operativo"""
+        # Mapeo de idiomas a voces según el sistema
+        self.voice_config = {
+            'say': {
+                'es': 'Paulina',    # Español (España/México)
+                'en': 'Samantha',   # Inglés (US)
+                'de': 'Anna',       # Alemán
+                'fr': 'Thomas',     # Francés
+                'it': 'Alice',      # Italiano
+                'pt': 'Luciana',    # Portugués
+                'ja': 'Kyoko',      # Japonés
+                'zh': 'Ting-Ting',  # Chino
+            },
+            'edge-tts': {
+                'es': 'es-ES-ElviraNeural',
+                'en': 'en-US-JennyNeural',
+                'de': 'de-DE-KatjaNeural',
+                'fr': 'fr-FR-DeniseNeural',
+                'it': 'it-IT-ElsaNeural',
+                'pt': 'pt-BR-FranciscaNeural',
+                'ja': 'ja-JP-NanamiNeural',
+                'zh': 'zh-CN-XiaoxiaoNeural',
+            },
+            'espeak': {
+                'es': 'es',
+                'en': 'en',
+                'de': 'de',
+                'fr': 'fr',
+                'it': 'it',
+                'pt': 'pt',
+                'ja': 'ja',
+                'zh': 'zh',
+            }
+        }
+
+        # Validar idioma y usar español por defecto si no está soportado
+        if self.language not in self.voice_config['espeak']:
+            print(f"{Colors.YELLOW}⚠️  Idioma '{self.language}' no soportado, usando 'es' por defecto{Colors.NC}")
+            self.language = 'es'
+
+        # Mostrar configuración de voz según el método
+        if self.method == "say":
+            voice = self.voice_config['say'].get(self.language, 'Paulina')
+            print(f"{Colors.CYAN}  🎙️  Voz seleccionada: {voice} ({self.language}){Colors.NC}")
+        elif self.method == "windows":
+            voice = self.voice_config['edge-tts'].get(self.language, 'es-ES-ElviraNeural')
+            print(f"{Colors.CYAN}  🎙️  Voz seleccionada: {voice} ({self.language}){Colors.NC}")
+        elif self.method == "linux":
+            print(f"{Colors.CYAN}  🎙️  Idioma de TTS: {self.language}{Colors.NC}")
 
     def get_tts_name(self) -> str:
         """Devuelve el nombre del TTS usado para el nombre del archivo"""
@@ -270,9 +323,12 @@ class TTSEngine:
             if not shutil.which("espeak-ng"):
                 return False
 
+            # Obtener el código de voz configurado para el idioma
+            voice_code = self.voice_config['espeak'].get(self.language, 'es')
+
             cmd = [
                 'espeak-ng',
-                '-v', 'es',              # Voz en español
+                '-v', voice_code,        # Voz según idioma configurado
                 '-s', str(rate),         # Velocidad en WPM
                 '-w', str(output_file),  # Archivo de salida WAV
                 text                     # Texto a convertir
@@ -303,13 +359,19 @@ class TTSEngine:
             rate_percent = int(((rate - 180) / 180) * 100)
             rate_arg = f"+{rate_percent}%" if rate_percent >= 0 else f"{rate_percent}%"
 
-            # Generar MP3 primero con edge-tts
+            # Generar MP3 primero con edge-tts usando voz configurada
+            voice = self.voice_config['edge-tts'].get(self.language, 'es-ES-ElviraNeural')
             temp_mp3 = output_file.with_suffix('.mp3')
+
+            # DEBUG: Mostrar voz usada (solo una vez por sesión)
+            if not hasattr(self, '_voice_logged'):
+                print(f"{Colors.CYAN}  🔍 DEBUG edge-tts: Usando voz '{voice}' (idioma: {self.language}){Colors.NC}")
+                self._voice_logged = True
 
             cmd = [
                 sys.executable, '-m', 'edge_tts',
                 '--text', text,
-                '--voice', 'es-ES-ElviraNeural',
+                '--voice', voice,
                 '--rate', rate_arg,
                 '--write-media', str(temp_mp3)
             ]
@@ -349,12 +411,31 @@ class TTSEngine:
 
             engine = pyttsx3.init()
 
-            # Buscar voz en español
+            # Buscar voz en el idioma especificado
+            language_names = {
+                'es': ['spanish', 'español', 'es'],
+                'en': ['english', 'en'],
+                'de': ['german', 'deutsch', 'de'],
+                'fr': ['french', 'français', 'fr'],
+                'it': ['italian', 'italiano', 'it'],
+                'pt': ['portuguese', 'português', 'pt'],
+            }
+
+            search_terms = language_names.get(self.language, ['spanish', 'es'])
             voices = engine.getProperty('voices')
+            voice_found = False
+
             for voice in voices:
-                if 'spanish' in voice.name.lower() or 'es' in str(voice.languages).lower():
+                voice_lower = voice.name.lower()
+                lang_lower = str(voice.languages).lower()
+                if any(term in voice_lower or term in lang_lower for term in search_terms):
                     engine.setProperty('voice', voice.id)
+                    voice_found = True
                     break
+
+            if not voice_found and self.language != 'en':
+                # Si no se encuentra voz en el idioma, intentar inglés como fallback
+                print(f"{Colors.YELLOW}  ⚠️ No se encontró voz en '{self.language}', usando inglés{Colors.NC}")
 
             # Configurar velocidad (pyttsx3 usa WPM directamente)
             engine.setProperty('rate', rate)
@@ -377,10 +458,11 @@ class TTSEngine:
         """Genera audio TTS con el rate especificado"""
         try:
             if self.method == "say":
-                # macOS say command
+                # macOS say command con voz configurada según idioma
+                voice = self.voice_config['say'].get(self.language, 'Paulina')
                 aiff_file = output_file.with_suffix('.aiff')
                 subprocess.run(
-                    ["say", "-v", "Paulina", "-r", str(rate), text, "-o", str(aiff_file)],
+                    ["say", "-v", voice, "-r", str(rate), text, "-o", str(aiff_file)],
                     check=True,
                     stderr=subprocess.DEVNULL
                 )
@@ -437,7 +519,7 @@ class TTSEngine:
                 for attempt in range(max_retries):
                     try:
                         # Generar audio con gTTS
-                        tts = gTTS(text=text, lang='es', slow=False)
+                        tts = gTTS(text=text, lang=self.language, slow=False)
                         temp_mp3 = output_file.with_suffix('.mp3')
                         tts.save(str(temp_mp3))
 
@@ -1409,7 +1491,11 @@ def main():
     print(f"{Colors.BLUE}🔍 DETECTANDO MÉTODO TTS{Colors.NC}")
     print(f"{Colors.BLUE}{'═' * 50}{Colors.NC}")
 
-    tts_engine = TTSEngine()
+    # Obtener idioma desde argumentos (default: 'es')
+    print(f"{Colors.CYAN}🔍 DEBUG: args.lang = {args.lang if hasattr(args, 'lang') else 'NO DEFINIDO'}{Colors.NC}")
+    language = args.lang if hasattr(args, 'lang') and args.lang else 'es'
+    print(f"{Colors.CYAN}🌍 Idioma configurado: {language}{Colors.NC}")
+    tts_engine = TTSEngine(language=language)
 
     # Verificar archivos
     srt_path = Path(args.srt_file)
@@ -1506,7 +1592,8 @@ def main():
         'test': args.test,
         'solo_audio': args.solo_audio,
         'no_freeze': args.no_freeze,
-        'remove_breaks': args.remove_breaks
+        'remove_breaks': args.remove_breaks,
+        'lang': language  # Guardar idioma en checkpoint
     }
 
     # PASO 2: Generar audios con ajuste inteligente
@@ -1611,11 +1698,16 @@ def main():
 
         # Si no se ajustó, truncar o freeze
         if not audio_created:
+            # Determinar si se está forzando un rate fijo
+            is_fixed_rate = hasattr(args, 'fix_rate') and args.fix_rate
+
             if args.no_freeze or args.solo_audio:
-                print(f"  {Colors.YELLOW}⚠️  Audio muy largo, generando con rate 240 y truncando{Colors.NC}")
+                # En modo truncate, usar el rate fijo o 240 si no hay rate fijo
+                truncate_rate = args.fix_rate if is_fixed_rate else 240
+                print(f"  {Colors.YELLOW}⚠️  Audio muy largo, generando con rate {truncate_rate} y truncando{Colors.NC}")
                 full_audio = temp_dir / f"{subtitle.consecutive_id}_full.wav"
 
-                if tts_engine.generate_audio(clean_text, 240, full_audio):
+                if tts_engine.generate_audio(clean_text, truncate_rate, full_audio):
                     if truncate_audio(full_audio, audio_file, available_time, error_logger):
                         full_audio.unlink()
                         rate_usage['truncated'] += 1
@@ -1625,7 +1717,7 @@ def main():
                         audio_segments[subtitle.consecutive_id] = AudioSegment(
                             subtitle_id=subtitle.consecutive_id,
                             audio_file=audio_file,
-                            rate=240,
+                            rate=truncate_rate,
                             needs_freeze=False,
                             was_truncated=True
                         )
@@ -1633,22 +1725,39 @@ def main():
                         print(f"  {Colors.RED}❌ Error truncando audio{Colors.NC}")
                         sys.exit(1)
             else:
-                print(f"  {Colors.YELLOW}⚠️  Audio muy largo, generando con rate 220 y marcando para freeze{Colors.NC}")
+                # En modo freeze, usar el rate fijo o 220 si no hay rate fijo
+                freeze_rate = args.fix_rate if is_fixed_rate else 220
+                print(f"  {Colors.YELLOW}⚠️  Audio muy largo, generando con rate {freeze_rate} y marcando para freeze{Colors.NC}")
 
-                if tts_engine.generate_audio(clean_text, 220, audio_file):
+                if tts_engine.generate_audio(clean_text, freeze_rate, audio_file):
                     audio_duration = get_audio_duration(audio_file)
                     freeze_time = audio_duration - available_time
-                    rate_usage['freeze'] += 1
-                    print(f"  {Colors.RED}🎬 Requerirá freeze de {freeze_time:.3f}s{Colors.NC}")
 
-                    audio_segments[subtitle.consecutive_id] = AudioSegment(
-                        subtitle_id=subtitle.consecutive_id,
-                        audio_file=audio_file,
-                        rate=220,
-                        needs_freeze=True,
-                        freeze_duration=freeze_time,
-                        was_truncated=False
-                    )
+                    # Solo marcar para freeze si la duración es positiva
+                    if freeze_time > 0.01:
+                        rate_usage['freeze'] += 1
+                        print(f"  {Colors.RED}🎬 Requerirá freeze de {freeze_time:.3f}s{Colors.NC}")
+
+                        audio_segments[subtitle.consecutive_id] = AudioSegment(
+                            subtitle_id=subtitle.consecutive_id,
+                            audio_file=audio_file,
+                            rate=freeze_rate,
+                            needs_freeze=True,
+                            freeze_duration=freeze_time,
+                            was_truncated=False
+                        )
+                    else:
+                        # El audio cabe sin necesidad de freeze
+                        rate_usage[freeze_rate] += 1
+                        print(f"  {Colors.GREEN}✅ Audio ajustado con rate {freeze_rate} (sin freeze){Colors.NC}")
+
+                        audio_segments[subtitle.consecutive_id] = AudioSegment(
+                            subtitle_id=subtitle.consecutive_id,
+                            audio_file=audio_file,
+                            rate=freeze_rate,
+                            needs_freeze=False,
+                            was_truncated=False
+                        )
 
         processed_count += 1
 
