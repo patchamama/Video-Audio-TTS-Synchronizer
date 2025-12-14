@@ -1698,11 +1698,16 @@ def main():
 
         # Si no se ajustó, truncar o freeze
         if not audio_created:
+            # Determinar si se está forzando un rate fijo
+            is_fixed_rate = hasattr(args, 'fix_rate') and args.fix_rate
+
             if args.no_freeze or args.solo_audio:
-                print(f"  {Colors.YELLOW}⚠️  Audio muy largo, generando con rate 240 y truncando{Colors.NC}")
+                # En modo truncate, usar el rate fijo o 240 si no hay rate fijo
+                truncate_rate = args.fix_rate if is_fixed_rate else 240
+                print(f"  {Colors.YELLOW}⚠️  Audio muy largo, generando con rate {truncate_rate} y truncando{Colors.NC}")
                 full_audio = temp_dir / f"{subtitle.consecutive_id}_full.wav"
 
-                if tts_engine.generate_audio(clean_text, 240, full_audio):
+                if tts_engine.generate_audio(clean_text, truncate_rate, full_audio):
                     if truncate_audio(full_audio, audio_file, available_time, error_logger):
                         full_audio.unlink()
                         rate_usage['truncated'] += 1
@@ -1712,7 +1717,7 @@ def main():
                         audio_segments[subtitle.consecutive_id] = AudioSegment(
                             subtitle_id=subtitle.consecutive_id,
                             audio_file=audio_file,
-                            rate=240,
+                            rate=truncate_rate,
                             needs_freeze=False,
                             was_truncated=True
                         )
@@ -1720,9 +1725,11 @@ def main():
                         print(f"  {Colors.RED}❌ Error truncando audio{Colors.NC}")
                         sys.exit(1)
             else:
-                print(f"  {Colors.YELLOW}⚠️  Audio muy largo, generando con rate 220 y marcando para freeze{Colors.NC}")
+                # En modo freeze, usar el rate fijo o 220 si no hay rate fijo
+                freeze_rate = args.fix_rate if is_fixed_rate else 220
+                print(f"  {Colors.YELLOW}⚠️  Audio muy largo, generando con rate {freeze_rate} y marcando para freeze{Colors.NC}")
 
-                if tts_engine.generate_audio(clean_text, 220, audio_file):
+                if tts_engine.generate_audio(clean_text, freeze_rate, audio_file):
                     audio_duration = get_audio_duration(audio_file)
                     freeze_time = audio_duration - available_time
 
@@ -1734,20 +1741,20 @@ def main():
                         audio_segments[subtitle.consecutive_id] = AudioSegment(
                             subtitle_id=subtitle.consecutive_id,
                             audio_file=audio_file,
-                            rate=220,
+                            rate=freeze_rate,
                             needs_freeze=True,
                             freeze_duration=freeze_time,
                             was_truncated=False
                         )
                     else:
                         # El audio cabe sin necesidad de freeze
-                        rate_usage[220] += 1
-                        print(f"  {Colors.GREEN}✅ Audio ajustado con rate 220 (sin freeze){Colors.NC}")
+                        rate_usage[freeze_rate] += 1
+                        print(f"  {Colors.GREEN}✅ Audio ajustado con rate {freeze_rate} (sin freeze){Colors.NC}")
 
                         audio_segments[subtitle.consecutive_id] = AudioSegment(
                             subtitle_id=subtitle.consecutive_id,
                             audio_file=audio_file,
-                            rate=220,
+                            rate=freeze_rate,
                             needs_freeze=False,
                             was_truncated=False
                         )
