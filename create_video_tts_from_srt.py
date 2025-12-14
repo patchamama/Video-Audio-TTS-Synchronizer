@@ -1725,17 +1725,32 @@ def main():
                 if tts_engine.generate_audio(clean_text, 220, audio_file):
                     audio_duration = get_audio_duration(audio_file)
                     freeze_time = audio_duration - available_time
-                    rate_usage['freeze'] += 1
-                    print(f"  {Colors.RED}🎬 Requerirá freeze de {freeze_time:.3f}s{Colors.NC}")
 
-                    audio_segments[subtitle.consecutive_id] = AudioSegment(
-                        subtitle_id=subtitle.consecutive_id,
-                        audio_file=audio_file,
-                        rate=220,
-                        needs_freeze=True,
-                        freeze_duration=freeze_time,
-                        was_truncated=False
-                    )
+                    # Solo marcar para freeze si la duración es positiva
+                    if freeze_time > 0.01:
+                        rate_usage['freeze'] += 1
+                        print(f"  {Colors.RED}🎬 Requerirá freeze de {freeze_time:.3f}s{Colors.NC}")
+
+                        audio_segments[subtitle.consecutive_id] = AudioSegment(
+                            subtitle_id=subtitle.consecutive_id,
+                            audio_file=audio_file,
+                            rate=220,
+                            needs_freeze=True,
+                            freeze_duration=freeze_time,
+                            was_truncated=False
+                        )
+                    else:
+                        # El audio cabe sin necesidad de freeze
+                        rate_usage[220] += 1
+                        print(f"  {Colors.GREEN}✅ Audio ajustado con rate 220 (sin freeze){Colors.NC}")
+
+                        audio_segments[subtitle.consecutive_id] = AudioSegment(
+                            subtitle_id=subtitle.consecutive_id,
+                            audio_file=audio_file,
+                            rate=220,
+                            needs_freeze=False,
+                            was_truncated=False
+                        )
 
         processed_count += 1
 
