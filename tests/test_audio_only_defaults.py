@@ -14,6 +14,7 @@ from create_video_tts_from_srt import (
     create_no_truncate_test_srt,
     create_fixed_rate_not_truncate_srt,
     get_no_truncate_rate_list,
+    is_rate_optimization_enabled,
     resolve_video_path,
 )
 
@@ -92,6 +93,12 @@ def test_no_truncate_test_srt_omits_a_zero_offset_prefix():
         assert output.read_text(encoding="utf-8").endswith("Hola\n\n")
 
 
+def test_rate_optimization_requires_an_explicit_flag():
+    assert is_rate_optimization_enabled(Namespace()) is False
+    assert is_rate_optimization_enabled(Namespace(optimize_rate=True, fix_rate=None, fix_rate_not_truncate=None, no_truncate=False)) is True
+    assert is_rate_optimization_enabled(Namespace(optimize_rate=True, fix_rate=200, fix_rate_not_truncate=None, no_truncate=False)) is False
+
+
 def test_fixed_rate_not_truncate_srt_ignores_original_timeline():
     subtitles = [
         Subtitle(1, "1", "00:01:00,000", "00:01:01,000", 60.0, 61.0, 1.0, "Primero."),
@@ -101,13 +108,13 @@ def test_fixed_rate_not_truncate_srt_ignores_original_timeline():
     durations = {"one.wav": 1.25, "two.wav": 2.5}
     with TemporaryDirectory() as directory:
         output = create_fixed_rate_not_truncate_srt(
-            Path(directory) / "original.srt", subtitles, segments, 200,
+            Path(directory) / "original.srt", subtitles, segments, 200, pause_ms=1000,
             duration_getter=lambda path: durations[path.name],
         )
         assert output.name == "original-fixed-rate-200.srt"
         assert output.read_text(encoding="utf-8") == (
             "1\n00:00:00,000 --> 00:00:01,250\nPrimero.\n\n"
-            "2\n00:00:01,250 --> 00:00:03,750\nSegundo.\n\n"
+            "2\n00:00:02,250 --> 00:00:04,750\nSegundo.\n\n"
         )
 
 
@@ -121,3 +128,4 @@ if __name__ == "__main__":
     test_no_truncate_test_srt_uses_actual_audio_timing_and_offset()
     test_no_truncate_test_srt_omits_a_zero_offset_prefix()
     test_fixed_rate_not_truncate_srt_ignores_original_timeline()
+    test_rate_optimization_requires_an_explicit_flag()

@@ -186,8 +186,10 @@ $('#f').onsubmit = async event => {
   if (!srt) { logs.textContent = 'Seleccioná un archivo SRT.'; return; }
   progress.max = 1; progress.value = 0; progressLabel.textContent = '⏳ Preparando procesamiento…'; outputFiles().replaceChildren();
   const options = Object.fromEntries(new FormData(event.currentTarget));
-  ['solo_audio', 'no_truncate', 'fix_rate_not_truncate', 'no_freeze', 'remove_breaks', 'only_remove_breaks', 'test'].forEach(key => { options[key] = options[key] === 'on'; });
+  ['solo_audio', 'no_truncate', 'optimize_rate', 'fix_rate_not_truncate', 'no_freeze', 'remove_breaks', 'only_remove_breaks', 'test'].forEach(key => { options[key] = options[key] === 'on'; });
   options.fix_rate_not_truncate_rate = Number(options.fix_rate_not_truncate_rate || 200);
+  options.fix_rate_not_truncate_pause = Number(options.fix_rate_not_truncate_pause || 1000);
+  options.test_count = Number(options.test_count || 30);
   const selectedVideo = await selectedOrUploaded(videoFile);
   if (options.fix_rate_not_truncate && selectedVideo) { logs.textContent = 'El modo audio plano solo se puede usar sin video.'; return; }
   const response = await fetch('/run', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({srt, video: selectedVideo, opts: options})});
@@ -208,6 +210,12 @@ fetch('/options').then(response => response.json()).then(options => $('#options'
     rate.name = option.rate_name; rate.type = 'number'; rate.min = '80'; rate.max = '400'; rate.step = '1'; rate.value = option.default || 200;
     rate.setAttribute('aria-label', 'Rate de voz en palabras por minuto');
     label.append(' · Rate: ', rate, ' ppm');
+  }
+  if (option.pause_name) {
+    const pause = document.createElement('input');
+    pause.name = option.pause_name; pause.type = 'number'; pause.min = '0'; pause.step = '100'; pause.value = option.pause_default || 1000;
+    pause.setAttribute('aria-label', 'Pausa entre líneas en milisegundos');
+    label.append(' · Pausa entre líneas (ms): ', pause);
   }
   return label;
 })));

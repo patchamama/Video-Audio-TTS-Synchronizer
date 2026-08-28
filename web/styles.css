@@ -8,3 +8,4 @@
 
 .mode-link{margin-left:auto;padding:.55rem .8rem;border:1px solid var(--line);border-radius:8px;color:var(--brand);font-weight:700;text-decoration:none;background:#fff}
 body.minimal{max-width:680px;padding-top:1rem}body.minimal .app-header p,body.minimal #drop,body.minimal #options,body.minimal #autoScroll,body.minimal #o{display:none}body.minimal form{gap:.65rem;padding:1rem}body.minimal .progress-panel{padding:1rem}body.minimal .app-icon{font-size:1.8rem}
+.test-option{display:flex;align-items:center;flex-wrap:wrap;gap:.35rem}.test-option input[type="number"]{width:5.5rem;padding:.4rem;border:1px solid var(--line)}

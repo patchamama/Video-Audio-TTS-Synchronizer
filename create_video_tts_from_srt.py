@@ -115,6 +115,20 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import shutil
 
+
+def configure_console_output():
+    """Evita que consolas Windows cp1252 fallen al imprimir Unicode."""
+    if platform.system() != "Windows":
+        return
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError):
+            pass
+
+
+configure_console_output()
+
 # Colores para terminal
 class Colors:
     """Códigos de colores ANSI (desactivados en Windows)"""
@@ -245,6 +259,16 @@ def apply_audio_only_defaults(args: argparse.Namespace) -> None:
         args.video = str(Path(args.srt_file).with_suffix('.mp4'))
         args.solo_audio = True
         args.no_truncate = True
+
+
+def is_rate_optimization_enabled(args: argparse.Namespace) -> bool:
+    """La búsqueda de rate óptimo es explícita y no altera los demás modos."""
+    return bool(
+        getattr(args, 'optimize_rate', False)
+        and not getattr(args, 'fix_rate', None)
+        and getattr(args, 'fix_rate_not_truncate', None) is None
+        and not getattr(args, 'no_truncate', False)
+    )
 
 
 def resolve_video_path(video: str, allow_missing: bool = False) -> Optional[Path]:
@@ -915,7 +939,8 @@ def create_no_truncate_test_srt(srt_path: Path, subtitles: List[Subtitle],
 
 def create_fixed_rate_not_truncate_srt(srt_path: Path, subtitles: List[Subtitle],
                                         audio_segments: Dict[int, AudioSegment],
-                                        rate: int, duration_getter=get_audio_duration) -> Path:
+                                        rate: int, pause_ms: int = 1000,
+                                        duration_getter=get_audio_duration) -> Path:
     """Genera un SRT secuencial que ignora por completo el timeline de entrada."""
     output_path = srt_path.with_name(f"{srt_path.stem}-fixed-rate-{rate}.srt")
     cursor = 0.0
@@ -928,7 +953,7 @@ def create_fixed_rate_not_truncate_srt(srt_path: Path, subtitles: List[Subtitle]
             output.write(f"{subtitle.consecutive_id}\n")
             output.write(f"{SRTParser.seconds_to_srt_time(cursor)} --> {SRTParser.seconds_to_srt_time(end)}\n")
             output.write(f"{subtitle.text}\n\n")
-            cursor = end
+            cursor = end + (pause_ms / 1000.0 if subtitle != subtitles[-1] else 0.0)
     return output_path
 
 def create_silence(duration: float, output: Path, error_logger: Optional[ErrorLogger] = None):
@@ -1537,8 +1562,12 @@ def main():
                        help="Idioma de los subtítulos (es, en, de, etc.)")
     parser.add_argument("--fix-rate", type=int, nargs="?", const=180,
                        help="Usar rate de audio fijo (default: 180 si no se especifica valor)")
+    parser.add_argument("--optimize-rate", action="store_true",
+                       help="Evaluar 50 líneas y reutilizar el rate óptimo detectado")
     parser.add_argument("--fix-rate-not-truncate", type=int, nargs="?", const=200,
                        help="Solo audio plano sin truncar ni respetar tiempos SRT (default: 200 wpm)")
+    parser.add_argument("--fix-rate-not-truncate-pause", type=int, default=1000,
+                       help="Pausa entre líneas del audio plano en ms (default: 1000)")
     parser.add_argument("-h", "--help", action="store_true",
                        help="Mostrar ayuda")
 
@@ -1615,6 +1644,8 @@ def main():
     # Este modo genera un audio plano; un video haría ambigua su semántica.
     if args.fix_rate_not_truncate is not None and args.video:
         parser.error("--fix-rate-not-truncate solo se puede usar sin video")
+    if args.fix_rate_not_truncate_pause < 0:
+        parser.error("--fix-rate-not-truncate-pause no puede ser negativo")
 
     # Un SRT sin video es el atajo para generar únicamente el audio. El video
     # homónimo .mp4 se conserva como referencia para nombres y checkpoints.
@@ -1663,7 +1694,9 @@ def main():
     if args.solo_audio:
         print(f"{Colors.CYAN}🎵 MODO SOLO-AUDIO: No se generará video{Colors.NC}")
     if args.fix_rate_not_truncate is not None:
-        print(f"{Colors.MAGENTA}📖 MODO AUDIO PLANO: sin truncar ni tiempos SRT, rate fijo {args.fix_rate_not_truncate} wpm{Colors.NC}")
+        print(f"{Colors.MAGENTA}📖 MODO AUDIO PLANO: sin truncar ni tiempos SRT, rate fijo {args.fix_rate_not_truncate} wpm, pausa {args.fix_rate_not_truncate_pause} ms{Colors.NC}")
+    if is_rate_optimization_enabled(args):
+        print(f"{Colors.MAGENTA}🎯 MODO OPTIMIZE-RATE: evaluará 50 líneas antes de reutilizar el rate óptimo{Colors.NC}")
     if args.no_freeze:
         print(f"{Colors.MAGENTA}🚫 MODO NO-FREEZE: Audios largos serán truncados{Colors.NC}")
     if args.no_truncate:
@@ -1738,6 +1771,8 @@ def main():
         'no_freeze': args.no_freeze,
         'no_truncate': args.no_truncate,
         'fix_rate_not_truncate': args.fix_rate_not_truncate,
+        'fix_rate_not_truncate_pause': args.fix_rate_not_truncate_pause,
+        'optimize_rate': args.optimize_rate,
         'remove_breaks': args.remove_breaks,
         'lang': language  # Guardar idioma en checkpoint
     }
@@ -1750,10 +1785,10 @@ def main():
     audio_segments: Dict[int, AudioSegment] = {}
     rate_usage = {180: 0, 200: 0, 220: 0, 240: 0, 'freeze': 0, 'truncated': 0}
     optimal_rate = 180
-    learning_phase = True
+    plain_audio_mode = args.fix_rate_not_truncate is not None
+    learning_phase = is_rate_optimization_enabled(args)
     processed_count = 0
     no_truncate_lag = 0.0
-    plain_audio_mode = args.fix_rate_not_truncate is not None
 
     srt_filename = Path(args.srt_file).name
 
@@ -1817,10 +1852,11 @@ def main():
             # Si se especificó --fix-rate, usar solo ese rate
             rate_list = [fixed_rate]
             print(f"{Colors.MAGENTA}🔒 Usando rate fijo: {fixed_rate} wpm{Colors.NC}")
-        elif args.no_freeze or args.solo_audio:
-            rate_list = [current_rate, 200, 220, 240]
+        elif is_rate_optimization_enabled(args):
+            rate_list = [current_rate, 200, 220, 240] if (args.no_freeze or args.solo_audio) else [current_rate, 200, 220]
         else:
-            rate_list = [current_rate, 200, 220]
+            # Sin --optimize-rate no se prueba ni persiste un rate alternativo.
+            rate_list = [current_rate]
 
         audio_created = False
         final_rate = current_rate
@@ -2049,7 +2085,8 @@ def main():
         print(f"{Colors.GREEN}✅ SRT ajustado al audio generado: {test_srt}{Colors.NC}")
     elif args.fix_rate_not_truncate is not None:
         test_srt = create_fixed_rate_not_truncate_srt(
-            srt_path, subtitles, audio_segments, args.fix_rate_not_truncate
+            srt_path, subtitles, audio_segments, args.fix_rate_not_truncate,
+            args.fix_rate_not_truncate_pause
         )
         print(f"{Colors.GREEN}✅ SRT plano ajustado al audio generado: {test_srt}{Colors.NC}")
 
@@ -2386,7 +2423,9 @@ def main():
 
         # Agregar padding si es necesario
         if args.fix_rate_not_truncate is not None:
-            expected_position = current_master_duration
+            expected_position = current_master_duration + (
+                args.fix_rate_not_truncate_pause / 1000.0 if idx + 1 < len(subtitles) else 0.0
+            )
         elif idx + 1 < len(subtitles):
             next_subtitle = subtitles[idx + 1]
             expected_position = next_subtitle.start_seconds
@@ -2756,7 +2795,12 @@ def install_dependencies():
 
 
 WEB_ASSET_NAMES = ('index.html', 'styles.css', 'app.js')
-WEB_ASSETS_URL = 'https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/main/web/'
+# `main` es el destino estable; la rama publicada conserva el fallback mientras
+# esos assets llegan a main, para que el script autónomo siga siendo instalable.
+WEB_ASSETS_URLS = (
+    'https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/main/web/',
+    'https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/claude/enhance-tts-subtitle-detection-01DCWM9NWFVeBvyqAHEuXXcR/web/',
+)
 
 
 def ensure_web_assets(web_dir: Optional[Path] = None, fetcher=None) -> Optional[Path]:
@@ -2771,9 +2815,16 @@ def ensure_web_assets(web_dir: Optional[Path] = None, fetcher=None) -> Optional[
         try:
             web_dir.mkdir(parents=True, exist_ok=True)
             for name in missing:
-                data = fetcher(WEB_ASSETS_URL + name)
+                data = None
+                for base_url in WEB_ASSETS_URLS:
+                    try:
+                        data = fetcher(base_url + name)
+                        if data:
+                            break
+                    except (OSError, ValueError, URLError):
+                        continue
                 if not data:
-                    raise OSError(f'GitHub devolvió un asset vacío: {name}')
+                    raise OSError(f'GitHub no devolvió el asset: {name}')
                 target = web_dir / name
                 temporary = target.with_suffix(target.suffix + '.tmp')
                 temporary.write_bytes(data)
@@ -2857,7 +2908,7 @@ def start_web_ui(port: int = 8765):
             parsed = urlparse(self.path)
             query = parse_qs(parsed.query)
             if parsed.path == '/options':
-                return self.send_json([{'name': 'solo_audio', 'label': 'Solo audio'}, {'name': 'no_truncate', 'label': 'No truncar'}, {'name': 'fix_rate_not_truncate', 'label': 'Audio plano sin truncar ni pausas SRT', 'rate_name': 'fix_rate_not_truncate_rate', 'default': 200}, {'name': 'no_freeze', 'label': 'No freeze'}, {'name': 'remove_breaks', 'label': 'Eliminar pausas'}, {'name': 'only_remove_breaks', 'label': 'Solo eliminar pausas'}])
+                return self.send_json([{'name': 'solo_audio', 'label': 'Solo audio'}, {'name': 'no_truncate', 'label': 'No truncar'}, {'name': 'optimize_rate', 'label': 'Optimizar rate tras 50 entradas'}, {'name': 'fix_rate_not_truncate', 'label': 'Audio plano sin truncar ni pausas SRT', 'rate_name': 'fix_rate_not_truncate_rate', 'default': 200, 'pause_name': 'fix_rate_not_truncate_pause', 'pause_default': 1000}, {'name': 'no_freeze', 'label': 'No freeze'}, {'name': 'remove_breaks', 'label': 'Eliminar pausas'}, {'name': 'only_remove_breaks', 'label': 'Solo eliminar pausas'}])
             if parsed.path == '/files':
                 return self.send_json({'srt': [p.name for p in Path.cwd().iterdir() if p.is_file() and p.suffix.lower() == '.srt'], 'video': [p.name for p in Path.cwd().iterdir() if p.is_file() and p.suffix.lower() in {'.mp4', '.mkv', '.mov', '.avi', '.webm'}]})
             if parsed.path == '/minimal' and web_dir:
@@ -2930,15 +2981,16 @@ def start_web_ui(port: int = 8765):
                 command = [sys.executable, '-u', str(Path(__file__).resolve()), str(srt)]
                 if video:
                     command.append(str(video))
-                for key in ('solo_audio', 'no_truncate', 'no_freeze', 'remove_breaks', 'only_remove_breaks'):
+                for key in ('solo_audio', 'no_truncate', 'optimize_rate', 'no_freeze', 'remove_breaks', 'only_remove_breaks'):
                     if opts.get(key):
                         command.append('--' + key.replace('_', '-'))
                 if opts.get('fix_rate_not_truncate'):
                     command.extend(['--fix-rate-not-truncate', str(opts.get('fix_rate_not_truncate_rate') or 200)])
+                    command.extend(['--fix-rate-not-truncate-pause', str(opts.get('fix_rate_not_truncate_pause') or 1000)])
                 if opts.get('lang'):
                     command.extend(['--lang', str(opts['lang'])])
                 if opts.get('test'):
-                    command.append('--test')
+                    command.extend(['--test', str(opts.get('test_count') or 30)])
                 job = {'id': uuid.uuid4().hex, 'directory': directory, 'started_at': time.time(), 'output': '▶ Trabajo creado. Iniciando backend...\n', 'done': False, 'files': []}
                 jobs[job['id']] = job
                 threading.Thread(target=run_job, args=(job, command), daemon=True).start()

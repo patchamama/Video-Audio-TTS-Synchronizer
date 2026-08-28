@@ -14,7 +14,7 @@
       <fieldset><legend>📝 Subtítulos</legend><select id="localSrt"><option value="">SRT de esta carpeta…</option></select><input id="srtFile" name="srt" type="file" accept=".srt"></fieldset>
       <fieldset><legend>🎬 Videos</legend><select id="localVideo"><option value="">Video de esta carpeta…</option></select><input id="videoFile" name="video" type="file" accept="video/*"></fieldset>
       <label>🌐 Idioma <select name="lang"><option value="es">Español</option><option value="en">English</option><option value="de">Deutsch</option><option value="fr">Français</option><option value="it">Italiano</option><option value="pt">Português</option></select></label>
-      <label>🧪 <input name="test" type="checkbox"> Modo test: procesar las primeras 30 entradas</label>
+      <label class="test-option">🧪 <input name="test" type="checkbox"> Modo test · Entradas: <input name="test_count" type="number" min="1" step="1" value="30" aria-label="Cantidad de entradas para el modo test"></label>
       <div id="options"></div>
       <button>✨ Procesar</button>
     </form>
