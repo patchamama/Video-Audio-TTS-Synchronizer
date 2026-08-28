@@ -70,6 +70,7 @@ ARCHIVOS GENERADOS
 - {srt}-to-test.srt                             : Subtítulos ajustados al audio (--no-truncate)
 - {video}_{tts}_{os}_{freeze}.mkv               : Video final (ej: video_gtts_Linux_freeze.mkv)
 - {video}_{tts}_{os}_{freeze}_sin_pausas.mkv    : Video sin pausas largas (--remove-breaks)
+- {video}_tts_audio.{wav,aac,mp3}               : Audio exportado (--solo-audio)
 - temp_{srt-name}_{code}/                       : Carpeta temporal con checkpoints
 
 Donde {freeze} puede ser:
@@ -897,7 +898,8 @@ def create_no_truncate_test_srt(srt_path: Path, subtitles: List[Subtitle],
                 f"{SRTParser.seconds_to_srt_time(start)} --> "
                 f"{SRTParser.seconds_to_srt_time(end)}\n"
             )
-            output.write(f"({offset:.3f}s) {subtitle.text}\n\n")
+            prefix = f"({offset:.3f}s) " if offset > 0.0005 else ""
+            output.write(f"{prefix}{subtitle.text}\n\n")
 
     return output_path
 
@@ -2378,6 +2380,7 @@ def main():
     if args.solo_audio:
         output_audio_wav = video_path.with_suffix('').with_name(f"{video_path.stem}_tts_audio.wav")
         output_audio_aac = video_path.with_suffix('').with_name(f"{video_path.stem}_tts_audio.aac")
+        output_audio_mp3 = video_path.with_suffix('').with_name(f"{video_path.stem}_tts_audio.mp3")
 
         shutil.copy(audio_final, output_audio_wav)
         print(f"{Colors.GREEN}✅ Audio: {output_audio_wav}{Colors.NC}")
@@ -2394,6 +2397,21 @@ def main():
             )
             if output_audio_aac.exists():
                 print(f"{Colors.GREEN}✅ Audio AAC: {output_audio_aac}{Colors.NC}")
+        except subprocess.CalledProcessError:
+            pass
+
+        # Convertir a MP3
+        try:
+            subprocess.run(
+                ["ffmpeg", "-i", str(output_audio_wav),
+                 "-c:a", "libmp3lame", "-b:a", "192k",
+                 str(output_audio_mp3), "-y"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True
+            )
+            if output_audio_mp3.exists():
+                print(f"{Colors.GREEN}✅ Audio MP3: {output_audio_mp3}{Colors.NC}")
         except subprocess.CalledProcessError:
             pass
 

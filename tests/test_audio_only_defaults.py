@@ -77,6 +77,20 @@ def test_no_truncate_test_srt_uses_actual_audio_timing_and_offset():
         )
 
 
+def test_no_truncate_test_srt_omits_a_zero_offset_prefix():
+    subtitle = Subtitle(1, "1", "00:00:01,000", "00:00:02,000", 1.0, 2.0, 1.0, "Hola")
+    segment = AudioSegment(1, Path("audio.wav"), 180, timing_offset=0.0)
+
+    with TemporaryDirectory() as directory:
+        output = create_no_truncate_test_srt(
+            Path(directory) / "original.srt", [subtitle], {1: segment},
+            duration_getter=lambda _: 1.0,
+        )
+
+        assert "(0.000s)" not in output.read_text(encoding="utf-8")
+        assert output.read_text(encoding="utf-8").endswith("Hola\n\n")
+
+
 if __name__ == "__main__":
     test_srt_without_video_uses_matching_mp4_and_audio_only()
     test_explicit_video_and_mode_are_preserved()
@@ -85,3 +99,4 @@ if __name__ == "__main__":
     test_no_truncate_mode_uses_max_rate_until_it_recovers_sync()
     test_no_truncate_mode_only_extends_video_when_audio_is_longer()
     test_no_truncate_test_srt_uses_actual_audio_timing_and_offset()
+    test_no_truncate_test_srt_omits_a_zero_offset_prefix()

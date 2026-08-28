@@ -695,6 +695,7 @@ El formato de nombres incluye información completa del procesamiento:
 | Sin pausas | `video_gtts_Linux_freeze_sin_pausas.mkv` | Con `--remove-breaks` |
 | Solo audio WAV | `video_tts_audio.wav` | Con `--solo-audio` |
 | Solo audio AAC | `video_tts_audio.aac` | Con `--solo-audio` |
+| Solo audio MP3 | `video_tts_audio.mp3` | Con `--solo-audio` |
 
 **Componentes del nombre:**
 - `{tts}`: Motor usado (say, gtts, espeak-ng, edge-tts, sapi)
