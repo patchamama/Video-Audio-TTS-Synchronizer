@@ -199,6 +199,10 @@ $('#f').onsubmit = async event => {
 };
 
 function populate(select, names) { names.forEach(name => select.add(new Option(name, name))); }
+fetch('/info')
+  .then(response => response.ok ? response.json() : Promise.reject(new Error('No se pudo obtener la versión')))
+  .then(info => { $('#appVersion').textContent = `v${info.version}`; })
+  .catch(() => { $('#appVersion').hidden = true; });
 fetch('/files').then(response => response.json()).then(files => { populate(localSrt, files.srt); populate(localVideo, files.video); });
 fetch('/options').then(response => response.json()).then(options => $('#options').replaceChildren(...options.map(option => {
   const label = document.createElement('label');
@@ -223,3 +227,33 @@ localSrt.onchange = () => { srtFile.dataset.local = localSrt.value; };
 localVideo.onchange = () => { videoFile.dataset.local = localVideo.value; };
 $('#drop').ondragover = event => event.preventDefault();
 $('#drop').ondrop = event => { event.preventDefault(); for (const file of event.dataTransfer.files) { if (/\.srt$/i.test(file.name)) srtFile.files = event.dataTransfer.files; else if (file.type.startsWith('video/')) videoFile.files = event.dataTransfer.files; } };
+
+
+const apiEndpoint = $('#apiEndpoint');
+apiEndpoint.value = `${location.origin}/api/generate-audio`;
+$('#apiTestForm').onsubmit = async event => {
+  event.preventDefault();
+  const result = $('#apiResult');
+  result.textContent = 'Generando audio…';
+  const payload = {
+    lang: $('#apiLang').value,
+    rate: Number($('#apiRate').value || 180),
+    fixed_rate: $('#apiFixedRate').checked,
+    duration: $('#apiDuration').value || undefined,
+    pause_ms: Number($('#apiPause').value || 0),
+  };
+  const file = $('#apiSrtFile').files[0];
+  if (file) payload.srt_file = await readFile(file);
+  else if ($('#apiTextIsSrt').checked) payload.srt_text = $('#apiText').value;
+  else payload.text = $('#apiText').value;
+  try {
+    const response = await fetch(apiEndpoint.value, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
+    const generated = await response.json();
+    if (!response.ok) throw new Error(generated.error || 'No se pudo generar audio');
+    const meta = document.createElement('p');
+    meta.textContent = `Idioma: ${generated.language} · Rate: ${generated.rate} ppm · Duración: ${generated.duration.toFixed(3)} s`;
+    const audio = document.createElement('audio'); audio.controls = true; audio.src = generated.audio.url;
+    const link = document.createElement('a'); link.href = generated.audio.url; link.download = generated.audio.name; link.textContent = 'Descargar audio';
+    result.replaceChildren(meta, audio, link);
+  } catch (error) { result.textContent = `Error: ${error.message}`; }
+};

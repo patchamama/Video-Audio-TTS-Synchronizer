@@ -108,12 +108,15 @@ import webbrowser
 import threading
 import mimetypes
 from urllib.parse import parse_qs, urlparse
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 from urllib.error import URLError
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import shutil
+
+# Incrementar en cada actualización publicada (SemVer).
+APP_VERSION = "2.1.0"
 
 
 def configure_console_output():
@@ -1532,6 +1535,95 @@ def process_youtube_video(youtube_input: str, target_lang: Optional[str] = None)
 
     return video_path, srt_path
 
+API_RATE_CANDIDATES = (180, 200, 220, 240)
+
+
+def _concat_wav_files(parts: List[Path], output: Path) -> None:
+    """Concatena WAVs locales sin depender de timestamps de subtítulos."""
+    if not parts:
+        raise ValueError('No hay texto para sintetizar')
+    current = parts[0]
+    temporary_files = []
+    for index, part in enumerate(parts[1:], 1):
+        target = output.parent / f'api_concat_{index}.wav'
+        subprocess.run(
+            ['ffmpeg', '-i', str(current), '-i', str(part),
+             '-filter_complex', '[0:a][1:a]concat=n=2:v=0:a=1[out]',
+             '-map', '[out]', str(target), '-y'],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True,
+        )
+        if current not in parts:
+            temporary_files.append(current)
+        current = target
+    shutil.copy(current, output)
+    for temporary in temporary_files:
+        temporary.unlink(missing_ok=True)
+
+
+def _api_text_lines(payload: dict, directory: Path) -> Tuple[List[str], str]:
+    """Acepta texto, SRT textual o un SRT base64 para la API local."""
+    srt_content = payload.get('srt_text') or payload.get('srt')
+    srt_file = payload.get('srt_file')
+    if srt_file:
+        srt_content = base64.b64decode(srt_file['data']).decode('utf-8-sig')
+    if srt_content:
+        srt_path = directory / 'request.srt'
+        srt_path.write_text(srt_content, encoding='utf-8')
+        return [subtitle.text for subtitle in SRTParser.parse_file(srt_path)], 'srt'
+    text = str(payload.get('text', '')).strip()
+    if not text:
+        raise ValueError('Enviá text, srt_text/srt o srt_file')
+    return [line.strip() for line in text.splitlines() if line.strip()], 'text'
+
+
+def generate_api_audio(payload: dict, directory: Path) -> Tuple[Path, dict]:
+    """Genera una respuesta de audio autocontenida para la API HTTP local."""
+    lines, source_type = _api_text_lines(payload, directory)
+    language = str(payload.get('lang') or payload.get('language') or 'es')
+    pause_ms = max(0, int(payload.get('pause_ms', 0) or 0))
+    target_duration = payload.get('duration')
+    target_duration = float(target_duration) if target_duration not in (None, '') else None
+    if target_duration is not None and target_duration <= 0:
+        raise ValueError('duration debe ser mayor que cero')
+    fixed_rate = bool(payload.get('fixed_rate'))
+    requested_rate = int(payload.get('rate', 180) or 180)
+    rates = [requested_rate] if fixed_rate or target_duration is None else list(API_RATE_CANDIDATES)
+    engine = TTSEngine(language=language)
+    candidates = []
+    for rate in dict.fromkeys(rates):
+        rate_dir = directory / f'rate_{rate}'
+        rate_dir.mkdir()
+        parts = []
+        for index, line in enumerate(lines):
+            audio_file = rate_dir / f'{index}.wav'
+            if not engine.generate_audio(re.sub(r'<[^>]*>', '', line), rate, audio_file):
+                raise RuntimeError(f'No se pudo generar audio a {rate} wpm')
+            parts.append(audio_file)
+            if pause_ms and index + 1 < len(lines):
+                silence = rate_dir / f'pause_{index}.wav'
+                create_silence(pause_ms / 1000.0, silence)
+                parts.append(silence)
+        output = rate_dir / 'combined.wav'
+        _concat_wav_files(parts, output)
+        duration = get_audio_duration(output)
+        candidates.append((abs(duration - target_duration) if target_duration is not None else 0, rate, duration, output))
+    _, rate, duration, selected = min(candidates, key=lambda candidate: candidate[0])
+    final_audio = directory / 'generated_audio.wav'
+    shutil.copy(selected, final_audio)
+    cursor, cues = 0.0, []
+    for index, line in enumerate(lines, 1):
+        # La duración por cue se obtiene de la generación seleccionada, no del SRT fuente.
+        cue_audio = selected.parent / f'{index - 1}.wav'
+        end = cursor + get_audio_duration(cue_audio)
+        cues.append({'id': index, 'start': cursor, 'end': end, 'text': line})
+        cursor = end + (pause_ms / 1000.0 if index < len(lines) else 0.0)
+    return final_audio, {
+        'language': language, 'rate': rate, 'duration': duration,
+        'target_duration': target_duration, 'fixed_rate': fixed_rate,
+        'pause_ms': pause_ms, 'source_type': source_type, 'cues': cues,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Genera audio TTS sincronizado con video desde archivo SRT",
@@ -2794,6 +2886,15 @@ def install_dependencies():
     print("✅ Dependencias listas.")
 
 
+def fetch_web_asset(url: str) -> bytes:
+    """Descarga un asset de GitHub; usa GITHUB_TOKEN si el repo es privado."""
+    headers = {'User-Agent': 'Video-Audio-TTS-Synchronizer'}
+    token = os.environ.get('GITHUB_TOKEN')
+    if token:
+        headers['Authorization'] = f'Bearer {token}'
+    return urlopen(Request(url, headers=headers), timeout=15).read()
+
+
 WEB_ASSET_NAMES = ('index.html', 'styles.css', 'app.js')
 # `main` es el destino estable; la rama publicada conserva el fallback mientras
 # esos assets llegan a main, para que el script autónomo siga siendo instalable.
@@ -2809,7 +2910,7 @@ def ensure_web_assets(web_dir: Optional[Path] = None, fetcher=None) -> Optional[
     Si GitHub no está disponible, el servidor conserva su UI mínima integrada.
     """
     web_dir = web_dir or Path(__file__).resolve().parent / 'web'
-    fetcher = fetcher or (lambda url: urlopen(url, timeout=5).read())
+    fetcher = fetcher or fetch_web_asset
     missing = [name for name in WEB_ASSET_NAMES if not (web_dir / name).is_file()]
     if missing:
         try:
@@ -2830,7 +2931,8 @@ def ensure_web_assets(web_dir: Optional[Path] = None, fetcher=None) -> Optional[
                 temporary.write_bytes(data)
                 temporary.replace(target)
         except (OSError, ValueError, URLError) as error:
-            print(f"{Colors.YELLOW}⚠️  No se pudo descargar la UI web: {error}. Usando interfaz mínima.{Colors.NC}")
+            print(f"{Colors.YELLOW}⚠️  No se pudo descargar la UI web: {error}.{Colors.NC}")
+            print(f"{Colors.YELLOW}   Si el repositorio es privado, definí GITHUB_TOKEN antes de iniciar el script. Usando interfaz mínima.{Colors.NC}")
     return web_dir if all((web_dir / name).is_file() for name in WEB_ASSET_NAMES) else None
 
 
@@ -2863,8 +2965,8 @@ def start_web_ui(port: int = 8765):
             except (BrokenPipeError, ConnectionResetError):
                 pass
 
-        def send_json(self, data):
-            self.send_response(200)
+        def send_json(self, data, status=200):
+            self.send_response(status)
             self.send_header('Content-Type', 'application/json')
             self.end_headers()
             self.write_body(json.dumps(data).encode())
@@ -2907,6 +3009,8 @@ def start_web_ui(port: int = 8765):
         def do_GET(self):
             parsed = urlparse(self.path)
             query = parse_qs(parsed.query)
+            if parsed.path == '/info':
+                return self.send_json({'version': APP_VERSION})
             if parsed.path == '/options':
                 return self.send_json([{'name': 'solo_audio', 'label': 'Solo audio'}, {'name': 'no_truncate', 'label': 'No truncar'}, {'name': 'optimize_rate', 'label': 'Optimizar rate tras 50 entradas'}, {'name': 'fix_rate_not_truncate', 'label': 'Audio plano sin truncar ni pausas SRT', 'rate_name': 'fix_rate_not_truncate_rate', 'default': 200, 'pause_name': 'fix_rate_not_truncate_pause', 'pause_default': 1000}, {'name': 'no_freeze', 'label': 'No freeze'}, {'name': 'remove_breaks', 'label': 'Eliminar pausas'}, {'name': 'only_remove_breaks', 'label': 'Solo eliminar pausas'}])
             if parsed.path == '/files':
@@ -2956,12 +3060,19 @@ def start_web_ui(port: int = 8765):
             self.write_body(page.encode())
 
         def do_POST(self):
-            if urlparse(self.path).path != '/run':
+            path = urlparse(self.path).path
+            if path not in {'/run', '/api/generate-audio'}:
                 self.send_error(404)
                 return
             try:
                 payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
                 directory = Path(tempfile.mkdtemp(prefix='video_tts_web_'))
+                if path == '/api/generate-audio':
+                    audio, metadata = generate_api_audio(payload, directory)
+                    job = {'id': uuid.uuid4().hex, 'directory': directory, 'started_at': time.time(), 'output': '', 'done': True, 'files': [audio]}
+                    jobs[job['id']] = job
+                    metadata['audio'] = {'name': audio.name, 'url': f"/file?id={job['id']}&name={audio.name}"}
+                    return self.send_json(metadata)
 
                 def local_or_saved(item):
                     if not item:
@@ -2996,7 +3107,7 @@ def start_web_ui(port: int = 8765):
                 threading.Thread(target=run_job, args=(job, command), daemon=True).start()
                 self.send_json({'id': job['id']})
             except Exception as error:
-                self.send_json({'error': str(error)})
+                self.send_json({'error': str(error)}, status=400)
 
         def log_message(self, *args):
             pass

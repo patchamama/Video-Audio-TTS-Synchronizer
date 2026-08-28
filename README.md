@@ -291,6 +291,8 @@ python3 create_video_tts_from_srt.py mi_video.srt --fix-rate-not-truncate 200
 
 `--optimize-rate` es opcional: evalúa las primeras 50 entradas y luego reutiliza el rate más efectivo. Sin esa bandera, el procesamiento usa el rate base sin aprendizaje automático.
 
+> Si ejecutás solo `create_video_tts_from_srt.py` y el repositorio es privado, la interfaz avanzada descarga `web/` usando `GITHUB_TOKEN`. En PowerShell: `$env:GITHUB_TOKEN = "github_pat_..."`; en CMD: `set GITHUB_TOKEN=github_pat_...`. Sin token, se muestra la interfaz mínima.
+
 **Uso:** Priorizá esta opción cuando ningún fragmento de texto puede perderse. Puede desfasar temporalmente el audio y extender el último frame del video.
 
 Además genera `mi_video-to-test.srt`: cada cue usa el inicio y fin reales del audio, y su texto comienza con el desfase frente al SRT original, por ejemplo `(1.250s) Texto del subtítulo`.
@@ -1250,8 +1252,10 @@ wget https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/m
 
 ---
 
-**Última actualización:** 2025-01-26
-**Versión:** 2.0.0 (Python rewrite)
+**Última actualización:** 2026-08-28
+**Versión:** 2.1.0 (Python rewrite)
+
+La versión se incrementa en cada actualización publicada siguiendo [Semantic Versioning](https://semver.org/lang/es/).
 
 ## Instalación y interfaz web autónomas
 

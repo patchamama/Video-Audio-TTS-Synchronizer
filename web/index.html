@@ -8,7 +8,7 @@
 </head>
 <body>
   <main>
-    <header class="app-header"><span class="app-icon">🎙️</span><div><h1>Video TTS</h1><p>Generá, revisá y sincronizá tu audio.</p></div><a id="minimalMode" class="mode-link" href="/minimal">🪶 Vista mínima</a></header>
+    <header class="app-header"><span class="app-icon">🎙️</span><div><h1>Video TTS <span id="appVersion" class="version-badge" aria-label="Versión del programa"></span></h1><p>Generá, revisá y sincronizá tu audio.</p></div><a id="minimalMode" class="mode-link" href="/minimal">🪶 Vista mínima</a></header>
     <form id="f">
       <div id="drop">📥 Arrastrá un <strong>SRT</strong> o <strong>video</strong> acá, o seleccioná archivos</div>
       <fieldset><legend>📝 Subtítulos</legend><select id="localSrt"><option value="">SRT de esta carpeta…</option></select><input id="srtFile" name="srt" type="file" accept=".srt"></fieldset>
@@ -21,6 +21,22 @@
     <section class="progress-panel" aria-live="polite"><label id="progressLabel" for="progress">⏳ Esperando procesamiento</label><progress id="progress" max="1" value="0"></progress></section>
     <label><input id="autoScroll" type="checkbox" checked> Seguir automáticamente las últimas entradas</label>
     <pre id="o">Esperando.</pre>
+    <details id="apiTest" class="api-test">
+      <summary>🧪 Probar endpoint de generación de audio</summary>
+      <form id="apiTestForm">
+        <label>URL del endpoint <input id="apiEndpoint" type="url"></label>
+        <label>Texto o SRT <textarea id="apiText" rows="5" placeholder="Escribí texto plano o pegá contenido SRT"></textarea></label>
+        <label>Archivo SRT <input id="apiSrtFile" type="file" accept=".srt"></label>
+        <label><input id="apiTextIsSrt" type="checkbox"> El texto está en formato SRT</label>
+        <label>Idioma <select id="apiLang"><option value="es">Español</option><option value="en">English</option><option value="de">Deutsch</option><option value="fr">Français</option><option value="it">Italiano</option><option value="pt">Português</option></select></label>
+        <label>Rate <input id="apiRate" type="number" min="80" max="400" value="180"> ppm</label>
+        <label><input id="apiFixedRate" type="checkbox"> Rate fijo</label>
+        <label>Duración objetivo (s) <input id="apiDuration" type="number" min="0.1" step="0.1" placeholder="Opcional"></label>
+        <label>Pausa entre líneas (ms) <input id="apiPause" type="number" min="0" step="100" value="1000"></label>
+        <button>Generar audio de prueba</button>
+      </form>
+      <div id="apiResult" aria-live="polite"></div>
+    </details>
     <div id="results"></div>
   </main>
   <script src="/web/app.js"></script>
