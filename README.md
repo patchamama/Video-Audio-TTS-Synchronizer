@@ -1244,3 +1244,14 @@ wget https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/m
 
 **Última actualización:** 2025-01-26
 **Versión:** 2.0.0 (Python rewrite)
+
+## Instalación y interfaz web autónomas
+
+El archivo `create_video_tts_from_srt.py` incorpora `--install-dependencies` para instalar FFmpeg y los paquetes Python requeridos según el sistema operativo. Los lanzadores sin lógica adicional son `install.sh` y `install.bat`.
+
+```bash
+./install.sh
+python3 create_video_tts_from_srt.py --web
+```
+
+Sin parámetros, el script muestra la URL y abre la interfaz local `http://127.0.0.1:8765`. La UI permite cargar SRT, video opcional, idioma y las opciones de audio disponibles; el backend local ejecuta el mismo CLI.

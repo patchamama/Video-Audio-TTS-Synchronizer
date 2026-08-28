@@ -100,7 +100,14 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
+import base64
+import http.server
+import webbrowser
+import threading
+import mimetypes
+from urllib.parse import parse_qs, urlparse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -1495,6 +1502,8 @@ def main():
                        help="Truncar audios largos en lugar de freeze")
     parser.add_argument("--no-truncate", action="store_true",
                        help="Conservar audios completos y recuperar desfase a 240 wpm")
+    parser.add_argument("--web", action="store_true", help="Abrir la interfaz web local")
+    parser.add_argument("--install-dependencies", action="store_true", help="Instalar requisitos del sistema y Python")
     parser.add_argument("--remove-breaks", action="store_true",
                        help="Eliminar pausas >15min del video final")
     parser.add_argument("--only-remove-breaks", action="store_true",
@@ -1511,6 +1520,13 @@ def main():
                        help="Mostrar ayuda")
 
     args = parser.parse_args()
+
+    if args.install_dependencies:
+        install_dependencies()
+        return
+    if args.web:
+        start_web_ui()
+        return
 
     # Si se especifica --continue, cargar checkpoint y reanudar
     if args.continue_from:
@@ -1560,7 +1576,12 @@ def main():
         args.srt_file = str(srt_path)
 
     # Si se pide ayuda o no hay parámetros, mostrar uso y prompt
-    if args.help or (not args.srt_file and not args.video and not (hasattr(args, 'youtube') and args.youtube)):
+    if not args.srt_file and not args.video and not (hasattr(args, 'youtube') and args.youtube):
+        parser.print_help()
+        print("\nAbrí http://127.0.0.1:8765 para usar la interfaz web. Ctrl+C para detenerla.")
+        start_web_ui()
+        return
+    if args.help:
         interactive_args = show_usage_and_prompt()
         if interactive_args:
             # Re-parsear con los argumentos interactivos
@@ -2666,6 +2687,73 @@ def main():
         # shutil.rmtree(temp_dir)  # Descomentar cuando esté probado
 
     print(f"{Colors.GREEN}¡Proceso completado!{Colors.NC}")
+
+def install_dependencies():
+    """Instala requisitos desde este único archivo Python."""
+    system = platform.system()
+    if not shutil.which("ffmpeg"):
+        if system == "Darwin":
+            if not shutil.which("brew"):
+                subprocess.run(["/bin/bash", "-c", "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"], check=True)
+            command = ["brew", "install", "ffmpeg"]
+        elif system == "Windows": command = ["winget", "install", "--id", "Gyan.FFmpeg", "-e"]
+        elif shutil.which("apt-get"): command = ["sudo", "apt-get", "install", "-y", "ffmpeg"]
+        elif shutil.which("dnf"): command = ["sudo", "dnf", "install", "-y", "ffmpeg"]
+        else: raise RuntimeError("Instalá FFmpeg manualmente: no se encontró un gestor compatible")
+        subprocess.run(command, check=True)
+    subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "gTTS", "pydub", "edge-tts", "pyttsx3", "yt-dlp"], check=True)
+    print("✅ Dependencias listas.")
+
+
+def start_web_ui(port: int = 8765):
+    """UI local con progreso en vivo y archivos reproducibles."""
+    jobs = {}
+    page = """<!doctype html><meta charset=utf-8><title>Video TTS</title><style>body{max-width:860px;margin:auto;padding:2rem;font:16px system-ui;background:#f6f5f2;color:#2d3436}form,pre,#results{display:grid;gap:12px;background:#ffffff;padding:1.4rem;border-radius:14px;margin:1rem 0}input,button{padding:.7rem;border-radius:8px;border:0}button{background:#7c8f7a;font-weight:bold}#drop{border:2px dashed #a9b8a7;padding:2rem;text-align:center;border-radius:12px}pre{white-space:pre-wrap;max-height:360px;overflow:auto}</style><h1>Video TTS</h1><form id=f><div id=drop>Arrastrá SRT/video acá o seleccioná archivos</div><fieldset><legend>Subtítulos</legend><select id=localSrt><option value=''>SRT de esta carpeta…</option></select><input id=srtFile name=srt type=file accept=.srt></fieldset><fieldset><legend>Videos</legend><select id=localVideo><option value=''>Video de esta carpeta…</option></select><input id=videoFile name=video type=file accept='video/*'></fieldset><label>Idioma<select name=lang><option value=es>Español</option><option value=en>English</option><option value=de>Deutsch</option><option value=fr>Français</option><option value=it>Italiano</option><option value=pt>Português</option></select></label><label><input name=test type=checkbox> Modo test: procesar las primeras 30 entradas</label><div id=options></div><button>Procesar</button></form><label><input id=autoScroll type=checkbox checked> Seguir automáticamente las últimas entradas</label><pre id=o>Esperando.</pre><div id=results></div><script>const autoScroll=document.querySelector('#autoScroll');const srtFile=document.querySelector('#srtFile'),videoFile=document.querySelector('#videoFile'),srtList=document.querySelector('#localSrt'),videoList=document.querySelector('#localVideo'),drop=document.querySelector('#drop');fetch('/options').then(r=>r.json()).then(x=>options.innerHTML=x.map(v=>`<label><input name='${v.name}' type=checkbox> ${v.label}</label>`).join(''));fetch('/files').then(r=>r.json()).then(x=>{x.srt.forEach(n=>srtList.add(new Option(n,n)));x.video.forEach(n=>videoList.add(new Option(n,n)))});srtList.onchange=()=>srtFile.dataset.local=srtList.value;videoList.onchange=()=>videoFile.dataset.local=videoList.value;drop.ondragover=e=>e.preventDefault();drop.ondrop=e=>{e.preventDefault();for(const x of e.dataTransfer.files){if(x.name.endsWith('.srt'))srtFile.files=e.dataTransfer.files;else videoFile.files=e.dataTransfer.files}};const read=async f=>f&&f.name?{name:f.name,data:btoa(String.fromCharCode(...new Uint8Array(await f.arrayBuffer())))}:null;f.onsubmit=async e=>{e.preventDefault();let d=new FormData(f);if(!srtFile.dataset.local&&!d.get('srt').name){o.textContent='Seleccioná un archivo SRT.';return}let opts=Object.fromEntries(d);for(let k of ['solo_audio','no_truncate','no_freeze','remove_breaks','test'])opts[k]=d.get(k)==='on';let j=await (await fetch('/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({srt:srtFile.dataset.local?{local:srtFile.dataset.local}:await read(d.get('srt')),video:videoFile.dataset.local?{local:videoFile.dataset.local}:await read(d.get('video')),opts})})).json();if(!j.id){o.textContent='Error: '+(j.error||'No se pudo crear el trabajo');return}let poll=async()=>{let x=await(await fetch('/status?id='+j.id)).json();o.textContent=x.output;if(autoScroll.checked)o.scrollTop=o.scrollHeight; if(x.done){results.innerHTML=x.files.map(v=>`<p><a href='${v.url}' download>${v.name}</a>${v.audio?`<br><audio controls src='${v.url}'></audio>`:''}</p>`).join('');return}setTimeout(poll,700)};poll()}</script>"""
+    def run_job(job, command):
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        for line in process.stdout:
+            clean_line = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', line)
+            print(clean_line, end='', flush=True)
+            job['output'] += clean_line
+        process.wait(); job['done'] = True
+        extensions = {'.wav', '.aac', '.mp3', '.mkv', '.mp4', '.srt'}
+        job['files'] = [p for root in (job['directory'], Path.cwd()) for p in root.iterdir() if p.is_file() and p.suffix.lower() in extensions and (root == job['directory'] or p.stat().st_mtime >= job['started_at'])]
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def send_json(self,data): self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(json.dumps(data).encode())
+        def do_GET(self):
+            parsed=urlparse(self.path); query=parse_qs(parsed.query)
+            if parsed.path == '/options': return self.send_json([{'name':'solo_audio','label':'Solo audio'},{'name':'no_truncate','label':'No truncar'},{'name':'no_freeze','label':'No freeze'},{'name':'remove_breaks','label':'Eliminar pausas'},{'name':'only_remove_breaks','label':'Solo eliminar pausas'}])
+            if parsed.path == '/files': return self.send_json({'srt':[p.name for p in Path.cwd().iterdir() if p.is_file() and p.suffix.lower()=='.srt'],'video':[p.name for p in Path.cwd().iterdir() if p.is_file() and p.suffix.lower() in {'.mp4','.mkv','.mov','.avi','.webm'}]})
+            if parsed.path == '/status':
+                job=jobs.get(query.get('id',[''])[0]);
+                if not job:return self.send_json({'error':'Job not found'})
+                files=[{'name':p.name,'url':f"/file?id={job['id']}&name={p.name}",'audio':p.suffix.lower() in {'.wav','.aac','.mp3'}} for p in job.get('files',[])]
+                return self.send_json({'output':job['output'],'done':job['done'],'files':files})
+            if parsed.path == '/file':
+                job=jobs.get(query.get('id',[''])[0]); name=Path(query.get('name',[''])[0]).name
+                path=next((p for p in job.get('files', []) if p.name == name), None) if job else None
+                if not path or not path.exists(): self.send_error(404);return
+                self.send_response(200);self.send_header('Content-Type',mimetypes.guess_type(path.name)[0] or 'application/octet-stream');self.end_headers();self.wfile.write(path.read_bytes());return
+            self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(page.encode())
+        def do_POST(self):
+            try:
+                payload=json.loads(self.rfile.read(int(self.headers['Content-Length'])));directory=Path(tempfile.mkdtemp(prefix='video_tts_web_'))
+                def save(item):
+                    if not item:return None
+                    path=directory/Path(item['name']).name;path.write_bytes(base64.b64decode(item['data']));return path
+                srt_item,video_item=payload['srt'],payload.get('video'); srt=Path.cwd()/srt_item['local'] if srt_item.get('local') else save(srt_item); video=Path.cwd()/video_item['local'] if video_item and video_item.get('local') else save(video_item); opts=payload.get('opts',{});command=[sys.executable, '-u', str(Path(__file__).resolve()),str(srt)]
+                if video:command.append(str(video))
+                for key in ('solo_audio','no_truncate','no_freeze','remove_breaks'):
+                    if opts.get(key):command.append('--'+key.replace('_','-'))
+                if opts.get('lang'):command.extend(['--lang',str(opts['lang'])])
+                if opts.get('test'):command.append('--test')
+                job={'id':uuid.uuid4().hex,'directory':directory,'started_at':time.time(),'output':'▶ Trabajo creado. Iniciando backend...\n','done':False,'files':[]};jobs[job['id']]=job;threading.Thread(target=run_job,args=(job,command),daemon=True).start();self.send_json({'id':job['id']})
+            except Exception as error:self.send_json({'error':str(error)})
+        def log_message(self,*args):pass
+    server=http.server.ThreadingHTTPServer(('127.0.0.1',port),Handler);webbrowser.open(f'http://127.0.0.1:{port}');print(f'🌐 UI: http://127.0.0.1:{port}')
+    try:server.serve_forever()
+    except KeyboardInterrupt:server.server_close()
+
 
 if __name__ == "__main__":
     main()
