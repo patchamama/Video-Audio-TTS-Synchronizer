@@ -108,6 +108,8 @@ import webbrowser
 import threading
 import mimetypes
 from urllib.parse import parse_qs, urlparse
+from urllib.request import urlopen
+from urllib.error import URLError
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -910,6 +912,25 @@ def create_no_truncate_test_srt(srt_path: Path, subtitles: List[Subtitle],
 
     return output_path
 
+
+def create_fixed_rate_not_truncate_srt(srt_path: Path, subtitles: List[Subtitle],
+                                        audio_segments: Dict[int, AudioSegment],
+                                        rate: int, duration_getter=get_audio_duration) -> Path:
+    """Genera un SRT secuencial que ignora por completo el timeline de entrada."""
+    output_path = srt_path.with_name(f"{srt_path.stem}-fixed-rate-{rate}.srt")
+    cursor = 0.0
+    with open(output_path, 'w', encoding='utf-8') as output:
+        for subtitle in subtitles:
+            segment = audio_segments.get(subtitle.consecutive_id)
+            if not segment:
+                continue
+            end = cursor + max(0.001, duration_getter(segment.audio_file))
+            output.write(f"{subtitle.consecutive_id}\n")
+            output.write(f"{SRTParser.seconds_to_srt_time(cursor)} --> {SRTParser.seconds_to_srt_time(end)}\n")
+            output.write(f"{subtitle.text}\n\n")
+            cursor = end
+    return output_path
+
 def create_silence(duration: float, output: Path, error_logger: Optional[ErrorLogger] = None):
     """Crea un archivo de audio con silencio"""
     try:
@@ -1516,6 +1537,8 @@ def main():
                        help="Idioma de los subtítulos (es, en, de, etc.)")
     parser.add_argument("--fix-rate", type=int, nargs="?", const=180,
                        help="Usar rate de audio fijo (default: 180 si no se especifica valor)")
+    parser.add_argument("--fix-rate-not-truncate", type=int, nargs="?", const=200,
+                       help="Solo audio plano sin truncar ni respetar tiempos SRT (default: 200 wpm)")
     parser.add_argument("-h", "--help", action="store_true",
                        help="Mostrar ayuda")
 
@@ -1589,9 +1612,16 @@ def main():
         else:
             sys.exit(0)
 
+    # Este modo genera un audio plano; un video haría ambigua su semántica.
+    if args.fix_rate_not_truncate is not None and args.video:
+        parser.error("--fix-rate-not-truncate solo se puede usar sin video")
+
     # Un SRT sin video es el atajo para generar únicamente el audio. El video
     # homónimo .mp4 se conserva como referencia para nombres y checkpoints.
     apply_audio_only_defaults(args)
+    if args.fix_rate_not_truncate is not None:
+        args.solo_audio = True
+        args.no_truncate = False
 
     # Validar que se proporcionaron los argumentos requeridos
     if not args.srt_file or not args.video:
@@ -1632,6 +1662,8 @@ def main():
         print(f"{Colors.YELLOW}⚠️  MODO TEST: {args.test} subtítulos{Colors.NC}")
     if args.solo_audio:
         print(f"{Colors.CYAN}🎵 MODO SOLO-AUDIO: No se generará video{Colors.NC}")
+    if args.fix_rate_not_truncate is not None:
+        print(f"{Colors.MAGENTA}📖 MODO AUDIO PLANO: sin truncar ni tiempos SRT, rate fijo {args.fix_rate_not_truncate} wpm{Colors.NC}")
     if args.no_freeze:
         print(f"{Colors.MAGENTA}🚫 MODO NO-FREEZE: Audios largos serán truncados{Colors.NC}")
     if args.no_truncate:
@@ -1705,6 +1737,7 @@ def main():
         'solo_audio': args.solo_audio,
         'no_freeze': args.no_freeze,
         'no_truncate': args.no_truncate,
+        'fix_rate_not_truncate': args.fix_rate_not_truncate,
         'remove_breaks': args.remove_breaks,
         'lang': language  # Guardar idioma en checkpoint
     }
@@ -1720,6 +1753,7 @@ def main():
     learning_phase = True
     processed_count = 0
     no_truncate_lag = 0.0
+    plain_audio_mode = args.fix_rate_not_truncate is not None
 
     srt_filename = Path(args.srt_file).name
 
@@ -1745,9 +1779,9 @@ def main():
                     rate=MAX_TTS_RATE if args.no_truncate else 180,
                     needs_freeze=False,
                     was_truncated=False,
-                    timing_offset=no_truncate_lag
+                    timing_offset=0.0 if plain_audio_mode else no_truncate_lag
                 )
-                if args.no_truncate:
+                if args.no_truncate and not plain_audio_mode:
                     no_truncate_lag = calculate_no_truncate_lag(
                         no_truncate_lag, get_audio_duration(audio_file), available_time
                     )
@@ -1770,7 +1804,10 @@ def main():
 
         # Determinar rates a probar
         fixed_rate = args.fix_rate if hasattr(args, 'fix_rate') and args.fix_rate else None
-        if args.no_truncate:
+        if plain_audio_mode:
+            rate_list = [args.fix_rate_not_truncate]
+            print(f"{Colors.MAGENTA}📖 Rate plano fijo: {args.fix_rate_not_truncate} wpm{Colors.NC}")
+        elif args.no_truncate:
             rate_list = get_no_truncate_rate_list(
                 current_rate, no_truncate_lag > 0.01, fixed_rate
             )
@@ -1806,11 +1843,11 @@ def main():
 
             # En no-truncate se conserva el audio completo a rate máximo,
             # aunque aún no entre en la ventana del subtítulo.
-            if diff < 0.5 or (args.no_truncate and try_rate == MAX_TTS_RATE):
+            if plain_audio_mode or diff < 0.5 or (args.no_truncate and try_rate == MAX_TTS_RATE):
                 temp_audio.rename(audio_file)
                 audio_created = True
                 final_rate = try_rate
-                rate_usage[try_rate] += 1
+                rate_usage[try_rate] = rate_usage.get(try_rate, 0) + 1
                 if args.no_truncate and diff >= 0.5:
                     print(f"  {Colors.YELLOW}🧪 Audio completo conservado; continuará el desfase{Colors.NC}")
                 else:
@@ -1822,9 +1859,9 @@ def main():
                     rate=try_rate,
                     needs_freeze=False,
                     was_truncated=False,
-                    timing_offset=no_truncate_lag
+                    timing_offset=0.0 if plain_audio_mode else no_truncate_lag
                 )
-                if args.no_truncate:
+                if args.no_truncate and not plain_audio_mode:
                     no_truncate_lag = calculate_no_truncate_lag(
                         no_truncate_lag, audio_duration, available_time
                     )
@@ -1944,7 +1981,9 @@ def main():
     truncated_count = sum(1 for seg in audio_segments.values() if seg.was_truncated)
 
     print(f"{Colors.GREEN}Total subtítulos: {len(subtitles)}{Colors.NC}")
-    if args.no_truncate:
+    if args.fix_rate_not_truncate is not None:
+        print(f"{Colors.GREEN}Audio plano continuo a {args.fix_rate_not_truncate} wpm, sin truncar ni desfase{Colors.NC}")
+    elif args.no_truncate:
         print(f"{Colors.YELLOW}Desfase final pendiente: {no_truncate_lag:.3f}s{Colors.NC}")
         print(f"{Colors.GREEN}Audios completos, sin truncar: {len(subtitles)}{Colors.NC}")
     elif args.no_freeze or args.solo_audio:
@@ -2008,6 +2047,11 @@ def main():
     if args.no_truncate:
         test_srt = create_no_truncate_test_srt(srt_path, subtitles, audio_segments)
         print(f"{Colors.GREEN}✅ SRT ajustado al audio generado: {test_srt}{Colors.NC}")
+    elif args.fix_rate_not_truncate is not None:
+        test_srt = create_fixed_rate_not_truncate_srt(
+            srt_path, subtitles, audio_segments, args.fix_rate_not_truncate
+        )
+        print(f"{Colors.GREEN}✅ SRT plano ajustado al audio generado: {test_srt}{Colors.NC}")
 
     # PASO 4: Procesar video
     print(f"{Colors.BLUE}{'═' * 50}{Colors.NC}")
@@ -2272,7 +2316,7 @@ def main():
         current_master_duration = get_audio_duration(audio_master)
 
         # Agregar gap si es necesario
-        gap = subtitle.start_seconds - current_master_duration
+        gap = 0.0 if args.fix_rate_not_truncate is not None else subtitle.start_seconds - current_master_duration
 
         if gap > 0.01:
             print(f"  {Colors.GREEN}→ Agregando silencio de {gap:.3f}s{Colors.NC}")
@@ -2341,7 +2385,9 @@ def main():
         current_master_duration = get_audio_duration(audio_master)
 
         # Agregar padding si es necesario
-        if idx + 1 < len(subtitles):
+        if args.fix_rate_not_truncate is not None:
+            expected_position = current_master_duration
+        elif idx + 1 < len(subtitles):
             next_subtitle = subtitles[idx + 1]
             expected_position = next_subtitle.start_seconds
         else:
@@ -2399,9 +2445,11 @@ def main():
     print(f"{Colors.BLUE}{'═' * 50}{Colors.NC}")
 
     if args.solo_audio:
-        output_audio_wav = video_path.with_suffix('').with_name(f"{video_path.stem}_tts_audio.wav")
-        output_audio_aac = video_path.with_suffix('').with_name(f"{video_path.stem}_tts_audio.aac")
-        output_audio_mp3 = video_path.with_suffix('').with_name(f"{video_path.stem}_tts_audio.mp3")
+        audio_stem = (f"{video_path.stem}_fixed_rate_{args.fix_rate_not_truncate}_audio"
+                      if args.fix_rate_not_truncate is not None else f"{video_path.stem}_tts_audio")
+        output_audio_wav = video_path.with_suffix('').with_name(f"{audio_stem}.wav")
+        output_audio_aac = video_path.with_suffix('').with_name(f"{audio_stem}.aac")
+        output_audio_mp3 = video_path.with_suffix('').with_name(f"{audio_stem}.mp3")
 
         shutil.copy(audio_final, output_audio_wav)
         print(f"{Colors.GREEN}✅ Audio: {output_audio_wav}{Colors.NC}")
@@ -2675,6 +2723,8 @@ def main():
 
     print(f"{Colors.GREEN}✅ {working_srt}{Colors.NC}")
     print(f"{Colors.GREEN}✅ {debug_srt}{Colors.NC}")
+    if args.fix_rate_not_truncate is not None:
+        print(f"{Colors.GREEN}✅ {test_srt}{Colors.NC}")
 
     # Mostrar resumen de errores si los hay
     if args.test or error_logger.has_errors() or error_logger.warnings:
@@ -2705,54 +2755,207 @@ def install_dependencies():
     print("✅ Dependencias listas.")
 
 
+WEB_ASSET_NAMES = ('index.html', 'styles.css', 'app.js')
+WEB_ASSETS_URL = 'https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/main/web/'
+
+
+def ensure_web_assets(web_dir: Optional[Path] = None, fetcher=None) -> Optional[Path]:
+    """Descarga los assets web faltantes y devuelve el directorio completo.
+
+    Si GitHub no está disponible, el servidor conserva su UI mínima integrada.
+    """
+    web_dir = web_dir or Path(__file__).resolve().parent / 'web'
+    fetcher = fetcher or (lambda url: urlopen(url, timeout=5).read())
+    missing = [name for name in WEB_ASSET_NAMES if not (web_dir / name).is_file()]
+    if missing:
+        try:
+            web_dir.mkdir(parents=True, exist_ok=True)
+            for name in missing:
+                data = fetcher(WEB_ASSETS_URL + name)
+                if not data:
+                    raise OSError(f'GitHub devolvió un asset vacío: {name}')
+                target = web_dir / name
+                temporary = target.with_suffix(target.suffix + '.tmp')
+                temporary.write_bytes(data)
+                temporary.replace(target)
+        except (OSError, ValueError, URLError) as error:
+            print(f"{Colors.YELLOW}⚠️  No se pudo descargar la UI web: {error}. Usando interfaz mínima.{Colors.NC}")
+    return web_dir if all((web_dir / name).is_file() for name in WEB_ASSET_NAMES) else None
+
+
 def start_web_ui(port: int = 8765):
-    """UI local con progreso en vivo y archivos reproducibles."""
+    """UI local con progreso en vivo, resultados y reproducción sincronizada."""
     jobs = {}
-    page = """<!doctype html><meta charset=utf-8><title>Video TTS</title><style>body{max-width:860px;margin:auto;padding:2rem;font:16px system-ui;background:#f6f5f2;color:#2d3436}form,pre,#results{display:grid;gap:12px;background:#ffffff;padding:1.4rem;border-radius:14px;margin:1rem 0}input,button{padding:.7rem;border-radius:8px;border:0}button{background:#7c8f7a;font-weight:bold}#drop{border:2px dashed #a9b8a7;padding:2rem;text-align:center;border-radius:12px}pre{white-space:pre-wrap;max-height:360px;overflow:auto}</style><h1>Video TTS</h1><form id=f><div id=drop>Arrastrá SRT/video acá o seleccioná archivos</div><fieldset><legend>Subtítulos</legend><select id=localSrt><option value=''>SRT de esta carpeta…</option></select><input id=srtFile name=srt type=file accept=.srt></fieldset><fieldset><legend>Videos</legend><select id=localVideo><option value=''>Video de esta carpeta…</option></select><input id=videoFile name=video type=file accept='video/*'></fieldset><label>Idioma<select name=lang><option value=es>Español</option><option value=en>English</option><option value=de>Deutsch</option><option value=fr>Français</option><option value=it>Italiano</option><option value=pt>Português</option></select></label><label><input name=test type=checkbox> Modo test: procesar las primeras 30 entradas</label><div id=options></div><button>Procesar</button></form><label><input id=autoScroll type=checkbox checked> Seguir automáticamente las últimas entradas</label><pre id=o>Esperando.</pre><div id=results></div><script>const autoScroll=document.querySelector('#autoScroll');const srtFile=document.querySelector('#srtFile'),videoFile=document.querySelector('#videoFile'),srtList=document.querySelector('#localSrt'),videoList=document.querySelector('#localVideo'),drop=document.querySelector('#drop');fetch('/options').then(r=>r.json()).then(x=>options.innerHTML=x.map(v=>`<label><input name='${v.name}' type=checkbox> ${v.label}</label>`).join(''));fetch('/files').then(r=>r.json()).then(x=>{x.srt.forEach(n=>srtList.add(new Option(n,n)));x.video.forEach(n=>videoList.add(new Option(n,n)))});srtList.onchange=()=>srtFile.dataset.local=srtList.value;videoList.onchange=()=>videoFile.dataset.local=videoList.value;drop.ondragover=e=>e.preventDefault();drop.ondrop=e=>{e.preventDefault();for(const x of e.dataTransfer.files){if(x.name.endsWith('.srt'))srtFile.files=e.dataTransfer.files;else videoFile.files=e.dataTransfer.files}};const read=async f=>f&&f.name?{name:f.name,data:btoa(String.fromCharCode(...new Uint8Array(await f.arrayBuffer())))}:null;f.onsubmit=async e=>{e.preventDefault();let d=new FormData(f);if(!srtFile.dataset.local&&!d.get('srt').name){o.textContent='Seleccioná un archivo SRT.';return}let opts=Object.fromEntries(d);for(let k of ['solo_audio','no_truncate','no_freeze','remove_breaks','test'])opts[k]=d.get(k)==='on';let j=await (await fetch('/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({srt:srtFile.dataset.local?{local:srtFile.dataset.local}:await read(d.get('srt')),video:videoFile.dataset.local?{local:videoFile.dataset.local}:await read(d.get('video')),opts})})).json();if(!j.id){o.textContent='Error: '+(j.error||'No se pudo crear el trabajo');return}let poll=async()=>{let x=await(await fetch('/status?id='+j.id)).json();o.textContent=x.output;if(autoScroll.checked)o.scrollTop=o.scrollHeight; if(x.done){results.innerHTML=x.files.map(v=>`<p><a href='${v.url}' download>${v.name}</a>${v.audio?`<br><audio controls src='${v.url}'></audio>`:''}</p>`).join('');return}setTimeout(poll,700)};poll()}</script>"""
+    web_dir = ensure_web_assets()
+    page = """<!doctype html><meta charset=utf-8><title>Video TTS</title><style>body{max-width:860px;margin:auto;padding:2rem;font:16px system-ui;background:#f6f5f2;color:#2d3436}form,pre,#results{display:grid;gap:12px;background:#ffffff;padding:1.4rem;border-radius:14px;margin:1rem 0}input,button{padding:.7rem;border-radius:8px;border:0}button{background:#7c8f7a;font-weight:bold}#drop{border:2px dashed #a9b8a7;padding:2rem;text-align:center;border-radius:12px}pre{white-space:pre-wrap;max-height:360px;overflow:auto}</style><h1>Video TTS</h1><p>La interfaz avanzada no está disponible. Podés procesar desde la terminal o reinstalar la carpeta <code>web/</code>.</p></html>"""
+
     def run_job(job, command):
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
         for line in process.stdout:
             clean_line = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', line)
             print(clean_line, end='', flush=True)
             job['output'] += clean_line
-        process.wait(); job['done'] = True
+        process.wait()
+        job['done'] = True
         extensions = {'.wav', '.aac', '.mp3', '.mkv', '.mp4', '.srt'}
-        job['files'] = [p for root in (job['directory'], Path.cwd()) for p in root.iterdir() if p.is_file() and p.suffix.lower() in extensions and (root == job['directory'] or p.stat().st_mtime >= job['started_at'])]
+        job['files'] = [
+            p for root in (job['directory'], Path.cwd()) for p in root.iterdir()
+            if p.is_file() and p.suffix.lower() in extensions
+            and (root == job['directory'] or p.stat().st_mtime >= job['started_at'])
+        ]
+
     class Handler(http.server.BaseHTTPRequestHandler):
-        def send_json(self,data): self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(json.dumps(data).encode())
-        def do_GET(self):
-            parsed=urlparse(self.path); query=parse_qs(parsed.query)
-            if parsed.path == '/options': return self.send_json([{'name':'solo_audio','label':'Solo audio'},{'name':'no_truncate','label':'No truncar'},{'name':'no_freeze','label':'No freeze'},{'name':'remove_breaks','label':'Eliminar pausas'},{'name':'only_remove_breaks','label':'Solo eliminar pausas'}])
-            if parsed.path == '/files': return self.send_json({'srt':[p.name for p in Path.cwd().iterdir() if p.is_file() and p.suffix.lower()=='.srt'],'video':[p.name for p in Path.cwd().iterdir() if p.is_file() and p.suffix.lower() in {'.mp4','.mkv','.mov','.avi','.webm'}]})
-            if parsed.path == '/status':
-                job=jobs.get(query.get('id',[''])[0]);
-                if not job:return self.send_json({'error':'Job not found'})
-                files=[{'name':p.name,'url':f"/file?id={job['id']}&name={p.name}",'audio':p.suffix.lower() in {'.wav','.aac','.mp3'}} for p in job.get('files',[])]
-                return self.send_json({'output':job['output'],'done':job['done'],'files':files})
-            if parsed.path == '/file':
-                job=jobs.get(query.get('id',[''])[0]); name=Path(query.get('name',[''])[0]).name
-                path=next((p for p in job.get('files', []) if p.name == name), None) if job else None
-                if not path or not path.exists(): self.send_error(404);return
-                self.send_response(200);self.send_header('Content-Type',mimetypes.guess_type(path.name)[0] or 'application/octet-stream');self.end_headers();self.wfile.write(path.read_bytes());return
-            self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(page.encode())
-        def do_POST(self):
+        def write_body(self, data):
+            """No registra un traceback cuando el navegador cancela una descarga."""
             try:
-                payload=json.loads(self.rfile.read(int(self.headers['Content-Length'])));directory=Path(tempfile.mkdtemp(prefix='video_tts_web_'))
-                def save(item):
-                    if not item:return None
-                    path=directory/Path(item['name']).name;path.write_bytes(base64.b64decode(item['data']));return path
-                srt_item,video_item=payload['srt'],payload.get('video'); srt=Path.cwd()/srt_item['local'] if srt_item.get('local') else save(srt_item); video=Path.cwd()/video_item['local'] if video_item and video_item.get('local') else save(video_item); opts=payload.get('opts',{});command=[sys.executable, '-u', str(Path(__file__).resolve()),str(srt)]
-                if video:command.append(str(video))
-                for key in ('solo_audio','no_truncate','no_freeze','remove_breaks'):
-                    if opts.get(key):command.append('--'+key.replace('_','-'))
-                if opts.get('lang'):command.extend(['--lang',str(opts['lang'])])
-                if opts.get('test'):command.append('--test')
-                job={'id':uuid.uuid4().hex,'directory':directory,'started_at':time.time(),'output':'▶ Trabajo creado. Iniciando backend...\n','done':False,'files':[]};jobs[job['id']]=job;threading.Thread(target=run_job,args=(job,command),daemon=True).start();self.send_json({'id':job['id']})
-            except Exception as error:self.send_json({'error':str(error)})
-        def log_message(self,*args):pass
-    server=http.server.ThreadingHTTPServer(('127.0.0.1',port),Handler);webbrowser.open(f'http://127.0.0.1:{port}');print(f'🌐 UI: http://127.0.0.1:{port}')
-    try:server.serve_forever()
-    except KeyboardInterrupt:server.server_close()
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        def send_json(self, data):
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.write_body(json.dumps(data).encode())
+
+        def send_file(self, path):
+            """Sirve archivos grandes por rangos, necesario para audio/video HTML5."""
+            size = path.stat().st_size
+            start, end = 0, size - 1
+            range_header = self.headers.get('Range', '')
+            match = re.fullmatch(r'bytes=(\d*)-(\d*)', range_header)
+            if match:
+                if match.group(1):
+                    start = int(match.group(1))
+                if match.group(2):
+                    end = min(int(match.group(2)), end)
+                if start > end or start >= size:
+                    self.send_error(416)
+                    return
+                self.send_response(206)
+                self.send_header('Content-Range', f'bytes {start}-{end}/{size}')
+            else:
+                self.send_response(200)
+            self.send_header('Content-Type', mimetypes.guess_type(path.name)[0] or 'application/octet-stream')
+            self.send_header('Accept-Ranges', 'bytes')
+            self.send_header('Content-Length', str(end - start + 1))
+            self.end_headers()
+            try:
+                with path.open('rb') as source:
+                    source.seek(start)
+                    remaining = end - start + 1
+                    while remaining:
+                        chunk = source.read(min(64 * 1024, remaining))
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        remaining -= len(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        def do_GET(self):
+            parsed = urlparse(self.path)
+            query = parse_qs(parsed.query)
+            if parsed.path == '/options':
+                return self.send_json([{'name': 'solo_audio', 'label': 'Solo audio'}, {'name': 'no_truncate', 'label': 'No truncar'}, {'name': 'fix_rate_not_truncate', 'label': 'Audio plano sin truncar ni pausas SRT', 'rate_name': 'fix_rate_not_truncate_rate', 'default': 200}, {'name': 'no_freeze', 'label': 'No freeze'}, {'name': 'remove_breaks', 'label': 'Eliminar pausas'}, {'name': 'only_remove_breaks', 'label': 'Solo eliminar pausas'}])
+            if parsed.path == '/files':
+                return self.send_json({'srt': [p.name for p in Path.cwd().iterdir() if p.is_file() and p.suffix.lower() == '.srt'], 'video': [p.name for p in Path.cwd().iterdir() if p.is_file() and p.suffix.lower() in {'.mp4', '.mkv', '.mov', '.avi', '.webm'}]})
+            if parsed.path == '/minimal' and web_dir:
+                self.send_response(302)
+                self.send_header('Location', '/web/index.html?mode=minimal')
+                self.end_headers()
+                return
+            if parsed.path == '/minimal':
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.end_headers()
+                self.write_body(page.encode())
+                return
+            if parsed.path.startswith('/web/') and web_dir:
+                asset = web_dir / Path(parsed.path).name
+                if asset.is_file():
+                    self.send_response(200)
+                    self.send_header('Content-Type', mimetypes.guess_type(asset.name)[0] or 'text/plain')
+                    self.end_headers()
+                    self.write_body(asset.read_bytes())
+                    return
+            if parsed.path == '/status':
+                job = jobs.get(query.get('id', [''])[0])
+                if not job:
+                    return self.send_json({'error': 'Job not found'})
+                files = [{'name': p.name, 'url': f"/file?id={job['id']}&name={p.name}", 'audio': p.suffix.lower() in {'.wav', '.aac', '.mp3'}} for p in job.get('files', [])]
+                return self.send_json({'output': job['output'], 'done': job['done'], 'files': files})
+            if parsed.path == '/file':
+                job = jobs.get(query.get('id', [''])[0])
+                name = Path(query.get('name', [''])[0]).name
+                path = next((p for p in job.get('files', []) if p.name == name), None) if job else None
+                if not path or not path.exists():
+                    self.send_error(404)
+                    return
+                return self.send_file(path)
+            if web_dir:
+                self.send_response(302)
+                self.send_header('Location', '/web/index.html')
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+            self.write_body(page.encode())
+
+        def do_POST(self):
+            if urlparse(self.path).path != '/run':
+                self.send_error(404)
+                return
+            try:
+                payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                directory = Path(tempfile.mkdtemp(prefix='video_tts_web_'))
+
+                def local_or_saved(item):
+                    if not item:
+                        return None
+                    if item.get('local'):
+                        candidate = Path.cwd() / Path(item['local']).name
+                        if not candidate.is_file():
+                            raise ValueError('El archivo local seleccionado no existe')
+                        return candidate
+                    path = directory / Path(item['name']).name
+                    path.write_bytes(base64.b64decode(item['data']))
+                    return path
+
+                srt = local_or_saved(payload['srt'])
+                video = local_or_saved(payload.get('video'))
+                opts = payload.get('opts', {})
+                command = [sys.executable, '-u', str(Path(__file__).resolve()), str(srt)]
+                if video:
+                    command.append(str(video))
+                for key in ('solo_audio', 'no_truncate', 'no_freeze', 'remove_breaks', 'only_remove_breaks'):
+                    if opts.get(key):
+                        command.append('--' + key.replace('_', '-'))
+                if opts.get('fix_rate_not_truncate'):
+                    command.extend(['--fix-rate-not-truncate', str(opts.get('fix_rate_not_truncate_rate') or 200)])
+                if opts.get('lang'):
+                    command.extend(['--lang', str(opts['lang'])])
+                if opts.get('test'):
+                    command.append('--test')
+                job = {'id': uuid.uuid4().hex, 'directory': directory, 'started_at': time.time(), 'output': '▶ Trabajo creado. Iniciando backend...\n', 'done': False, 'files': []}
+                jobs[job['id']] = job
+                threading.Thread(target=run_job, args=(job, command), daemon=True).start()
+                self.send_json({'id': job['id']})
+            except Exception as error:
+                self.send_json({'error': str(error)})
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(('127.0.0.1', port), Handler)
+    webbrowser.open(f'http://127.0.0.1:{port}')
+    print(f'🌐 UI: http://127.0.0.1:{port}')
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        server.server_close()
 
 
 if __name__ == "__main__":

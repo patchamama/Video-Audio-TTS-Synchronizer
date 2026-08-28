@@ -283,6 +283,12 @@ python3 create_video_tts_from_srt.py mi_video.srt mi_video.mp4 --solo-audio
 python3 create_video_tts_from_srt.py mi_video.srt mi_video.mp4 --no-truncate
 ```
 
+```bash
+python3 create_video_tts_from_srt.py mi_video.srt --fix-rate-not-truncate 200
+```
+
+`--fix-rate-not-truncate [ppm]` crea solo audio continuo con rate constante (200 ppm por defecto) y un `<srt>-fixed-rate-<ppm>.srt` nuevo. Ignora los tiempos y huecos del SRT original: conserva únicamente el texto y sus pausas naturales de puntuación.
+
 **Uso:** Priorizá esta opción cuando ningún fragmento de texto puede perderse. Puede desfasar temporalmente el audio y extender el último frame del video.
 
 Además genera `mi_video-to-test.srt`: cada cue usa el inicio y fin reales del audio, y su texto comienza con el desfase frente al SRT original, por ejemplo `(1.250s) Texto del subtítulo`.

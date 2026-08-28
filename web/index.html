@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Video TTS</title>
+  <link rel="stylesheet" href="/web/styles.css">
+</head>
+<body>
+  <main>
+    <header class="app-header"><span class="app-icon">🎙️</span><div><h1>Video TTS</h1><p>Generá, revisá y sincronizá tu audio.</p></div><a id="minimalMode" class="mode-link" href="/minimal">🪶 Vista mínima</a></header>
+    <form id="f">
+      <div id="drop">📥 Arrastrá un <strong>SRT</strong> o <strong>video</strong> acá, o seleccioná archivos</div>
+      <fieldset><legend>📝 Subtítulos</legend><select id="localSrt"><option value="">SRT de esta carpeta…</option></select><input id="srtFile" name="srt" type="file" accept=".srt"></fieldset>
+      <fieldset><legend>🎬 Videos</legend><select id="localVideo"><option value="">Video de esta carpeta…</option></select><input id="videoFile" name="video" type="file" accept="video/*"></fieldset>
+      <label>🌐 Idioma <select name="lang"><option value="es">Español</option><option value="en">English</option><option value="de">Deutsch</option><option value="fr">Français</option><option value="it">Italiano</option><option value="pt">Português</option></select></label>
+      <label>🧪 <input name="test" type="checkbox"> Modo test: procesar las primeras 30 entradas</label>
+      <div id="options"></div>
+      <button>✨ Procesar</button>
+    </form>
+    <section class="progress-panel" aria-live="polite"><label id="progressLabel" for="progress">⏳ Esperando procesamiento</label><progress id="progress" max="1" value="0"></progress></section>
+    <label><input id="autoScroll" type="checkbox" checked> Seguir automáticamente las últimas entradas</label>
+    <pre id="o">Esperando.</pre>
+    <div id="results"></div>
+  </main>
+  <script src="/web/app.js"></script>
+</body>
+</html>

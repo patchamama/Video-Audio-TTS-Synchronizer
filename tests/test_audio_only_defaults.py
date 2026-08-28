@@ -12,6 +12,7 @@ from create_video_tts_from_srt import (
     calculate_no_truncate_lag,
     calculate_required_video_padding,
     create_no_truncate_test_srt,
+    create_fixed_rate_not_truncate_srt,
     get_no_truncate_rate_list,
     resolve_video_path,
 )
@@ -91,6 +92,25 @@ def test_no_truncate_test_srt_omits_a_zero_offset_prefix():
         assert output.read_text(encoding="utf-8").endswith("Hola\n\n")
 
 
+def test_fixed_rate_not_truncate_srt_ignores_original_timeline():
+    subtitles = [
+        Subtitle(1, "1", "00:01:00,000", "00:01:01,000", 60.0, 61.0, 1.0, "Primero."),
+        Subtitle(2, "2", "00:05:00,000", "00:05:01,000", 300.0, 301.0, 1.0, "Segundo."),
+    ]
+    segments = {1: AudioSegment(1, Path("one.wav"), 200), 2: AudioSegment(2, Path("two.wav"), 200)}
+    durations = {"one.wav": 1.25, "two.wav": 2.5}
+    with TemporaryDirectory() as directory:
+        output = create_fixed_rate_not_truncate_srt(
+            Path(directory) / "original.srt", subtitles, segments, 200,
+            duration_getter=lambda path: durations[path.name],
+        )
+        assert output.name == "original-fixed-rate-200.srt"
+        assert output.read_text(encoding="utf-8") == (
+            "1\n00:00:00,000 --> 00:00:01,250\nPrimero.\n\n"
+            "2\n00:00:01,250 --> 00:00:03,750\nSegundo.\n\n"
+        )
+
+
 if __name__ == "__main__":
     test_srt_without_video_uses_matching_mp4_and_audio_only()
     test_explicit_video_and_mode_are_preserved()
@@ -100,3 +120,4 @@ if __name__ == "__main__":
     test_no_truncate_mode_only_extends_video_when_audio_is_longer()
     test_no_truncate_test_srt_uses_actual_audio_timing_and_offset()
     test_no_truncate_test_srt_omits_a_zero_offset_prefix()
+    test_fixed_rate_not_truncate_srt_ignores_original_timeline()
