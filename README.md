@@ -137,6 +137,14 @@ python3 create_video_tts_from_srt.py
 python3 create_video_tts_from_srt.py mi_video.srt mi_video.mp4
 ```
 
+Para generar solo el audio podés omitir el video:
+
+```bash
+python3 create_video_tts_from_srt.py mi_video.srt
+```
+
+Es equivalente a `python3 create_video_tts_from_srt.py mi_video.srt mi_video.mp4 --solo-audio --no-truncate`; usa `mi_video.mp4` solo como base para nombrar los audios de salida, por lo que no necesita existir.
+
 ### Opción 3: Clonar Repositorio Completo
 
 ```bash
@@ -210,7 +218,7 @@ El script te guiará paso a paso preguntando:
 ### Sintaxis Básica (Modo Comando)
 
 ```bash
-python3 create_video_tts_from_srt.py <archivo.srt> <video.mp4> [opciones]
+python3 create_video_tts_from_srt.py <archivo.srt> [video.mp4] [opciones]
 ```
 
 ### Parámetros
@@ -220,7 +228,7 @@ python3 create_video_tts_from_srt.py <archivo.srt> <video.mp4> [opciones]
 | Parámetro | Descripción | Requerido |
 |-----------|-------------|-----------|
 | `srt_file` | Archivo de subtítulos SRT | ✅ Sí |
-| `video` | Archivo de video (mp4, mkv, etc.) | ✅ Sí |
+| `video` | Archivo de video (mp4, mkv, etc.). Si se omite, usa el `.mp4` homónimo como base y activa `--solo-audio --no-truncate`; en ese modo el archivo no necesita existir. | ❌ No |
 | `audio_dir` | Carpeta con audios ya generados | ❌ No |
 
 #### Opcionales
@@ -230,6 +238,7 @@ python3 create_video_tts_from_srt.py <archivo.srt> <video.mp4> [opciones]
 | `--test N` | Procesar solo N subtítulos | - |
 | `--solo-audio` | Solo generar audio, sin video | False |
 | `--no-freeze` | Truncar en lugar de freeze | False |
+| `--no-truncate` | Nunca trunca texto: conserva el audio largo y usa 240 WPM en los siguientes segmentos hasta recuperar el desfase. Genera `<srt>-to-test.srt` ajustado al audio y, si hace falta, prolonga el último frame del video. | False |
 | `--remove-breaks` | Eliminar pausas >15min | False |
 | `--only-remove-breaks` | Solo eliminar pausas (sin TTS) | False |
 | `--youtube ID/URL` | Descargar video y subtítulos de YouTube | - |
@@ -266,7 +275,19 @@ python3 create_video_tts_from_srt.py mi_video.srt mi_video.mp4 --solo-audio
 
 **Resultado:** `temp_audio_*/audio_final.wav`
 
-#### Caso 4: Sin freeze frames
+#### Caso 4: No-truncate — conservar todo el texto
+
+```bash
+# Si un audio excede su ventana, se conserva completo a 240 WPM.
+# Los siguientes segmentos se generan a 240 WPM hasta recuperar el desfase.
+python3 create_video_tts_from_srt.py mi_video.srt mi_video.mp4 --no-truncate
+```
+
+**Uso:** Priorizá esta opción cuando ningún fragmento de texto puede perderse. Puede desfasar temporalmente el audio y extender el último frame del video.
+
+Además genera `mi_video-to-test.srt`: cada cue usa el inicio y fin reales del audio, y su texto comienza con el desfase frente al SRT original, por ejemplo `(1.250s) Texto del subtítulo`.
+
+#### Caso 5: Sin freeze frames
 
 ```bash
 # Trunca audios largos en lugar de congelar video
@@ -275,7 +296,7 @@ python3 create_video_tts_from_srt.py mi_video.srt mi_video.mp4 --no-freeze
 
 **Uso:** Cuando prefieres mantener el ritmo del video original.
 
-#### Caso 5: Eliminar pausas
+#### Caso 6: Eliminar pausas
 
 ```bash
 # Procesa y elimina pausas mayores a 15 minutos
@@ -284,7 +305,7 @@ python3 create_video_tts_from_srt.py mi_video.srt mi_video.mp4 --remove-breaks
 
 **Resultado:** `mi_video_sin_pausas.mkv`
 
-#### Caso 6: Multi-idioma TTS
+#### Caso 7: Multi-idioma TTS
 
 ```bash
 # Genera audio en inglés

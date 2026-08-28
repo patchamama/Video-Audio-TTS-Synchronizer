@@ -15,13 +15,14 @@ PARÁMETROS DE USO
 
 Posicionales:
   srt_file              Archivo de subtítulos en formato SRT
-  video                 Archivo de video (mkv, mp4, etc.)
+  video                 [Opcional] Archivo de video (mkv, mp4, etc.)
   audio_dir             [Opcional] Carpeta con audios previamente generados
 
 Opcionales:
   --test N              Modo test: procesar solo N subtítulos (default: 30 si no se especifica N)
   --solo-audio          Solo generar el audio master, sin procesar video
   --no-freeze           Truncar audios largos en lugar de congelar video
+  --no-truncate        Nunca truncar: recuperar desfase usando rate máximo
   --remove-breaks       Eliminar pausas mayores a 15 minutos del video final
   --only-remove-breaks  SOLO eliminar pausas del video (sin generar TTS)
 
@@ -36,6 +37,12 @@ python3 create_video_tts_from_srt.py video.srt video.mp4 --test 50
 
 # Solo generar audio sin procesar video
 python3 create_video_tts_from_srt.py video.srt video.mp4 --solo-audio
+
+# Atajo: usa video.mp4 y activa --solo-audio automáticamente
+python3 create_video_tts_from_srt.py video.srt
+
+# No-truncate: conservar todo el texto y recuperar el desfase a rate máximo
+python3 create_video_tts_from_srt.py video.srt video.mp4 --no-truncate
 
 # Eliminar pausas largas del video final
 python3 create_video_tts_from_srt.py video.srt video.mp4 --remove-breaks
@@ -60,6 +67,7 @@ ARCHIVOS GENERADOS
 
 - {video}_working.srt                           : Subtítulos con IDs renumerados consecutivamente
 - {video}_debug.srt                             : Subtítulos con metadatos de TTS
+- {srt}-to-test.srt                             : Subtítulos ajustados al audio (--no-truncate)
 - {video}_{tts}_{os}_{freeze}.mkv               : Video final (ej: video_gtts_Linux_freeze.mkv)
 - {video}_{tts}_{os}_{freeze}_sin_pausas.mkv    : Video sin pausas largas (--remove-breaks)
 - temp_{srt-name}_{code}/                       : Carpeta temporal con checkpoints
@@ -121,6 +129,9 @@ class Colors:
         MAGENTA = '\033[0;35m'
         CYAN = '\033[0;36m'
         NC = '\033[0m'  # No Color
+
+
+MAX_TTS_RATE = 240
 
 class ErrorLogger:
     """Registra errores durante la ejecución"""
@@ -188,6 +199,7 @@ class AudioSegment:
     needs_freeze: bool = False
     freeze_duration: float = 0.0
     was_truncated: bool = False
+    timing_offset: float = 0.0
 
 def get_unique_output_path(base_path: Path) -> Path:
     """
@@ -215,6 +227,45 @@ def get_unique_output_path(base_path: Path) -> Path:
             import time
             timestamp = int(time.time())
             return parent / f"{stem}_{timestamp}{suffix}"
+
+
+def apply_audio_only_defaults(args: argparse.Namespace) -> None:
+    """Completa el video y activa solo-audio sin truncar cuando se recibe solo un SRT."""
+    if args.srt_file and not args.video:
+        args.video = str(Path(args.srt_file).with_suffix('.mp4'))
+        args.solo_audio = True
+        args.no_truncate = True
+
+
+def resolve_video_path(video: str, allow_missing: bool = False) -> Optional[Path]:
+    """Encuentra el video o conserva su ruta como referencia en modo solo-audio."""
+    for ext in ['.mkv', '.mp4', '']:
+        candidate = Path(video).with_suffix(ext) if ext else Path(video)
+        if candidate.exists():
+            return candidate
+
+    return Path(video) if allow_missing else None
+
+
+def calculate_no_truncate_lag(current_lag: float, audio_duration: float,
+                               available_time: float) -> float:
+    """Devuelve el desfase acumulado después de ubicar un audio completo."""
+    return max(0.0, current_lag + audio_duration - available_time)
+
+
+def get_no_truncate_rate_list(current_rate: int, is_behind: bool,
+                               fixed_rate: Optional[int]) -> List[int]:
+    """Prioriza el rate máximo mientras haya desfase, sin repetir valores."""
+    candidates = [MAX_TTS_RATE] if is_behind else (
+        [fixed_rate, MAX_TTS_RATE] if fixed_rate and fixed_rate <= MAX_TTS_RATE else
+        [current_rate, 200, 220, MAX_TTS_RATE]
+    )
+    return list(dict.fromkeys(candidates))
+
+
+def calculate_required_video_padding(video_duration: float, audio_duration: float) -> float:
+    """Calcula cuánto congelar el último frame para no cortar audio no-truncate."""
+    return max(0.0, audio_duration - video_duration)
 
 class TTSEngine:
     """Maneja la generación de TTS"""
@@ -823,6 +874,33 @@ def get_audio_duration(file_path: Path) -> float:
     except (subprocess.CalledProcessError, ValueError):
         return 0.0
 
+
+def create_no_truncate_test_srt(srt_path: Path, subtitles: List[Subtitle],
+                                audio_segments: Dict[int, AudioSegment],
+                                duration_getter=get_audio_duration) -> Path:
+    """Genera subtítulos con la línea temporal real del audio sin truncar."""
+    output_path = srt_path.with_name(f"{srt_path.stem}-to-test.srt")
+
+    with open(output_path, 'w', encoding='utf-8') as output:
+        for subtitle in subtitles:
+            segment = audio_segments.get(subtitle.consecutive_id)
+            if not segment:
+                continue
+
+            offset = segment.timing_offset
+            start = subtitle.start_seconds + offset
+            duration = max(0.001, duration_getter(segment.audio_file))
+            end = start + duration
+
+            output.write(f"{subtitle.consecutive_id}\n")
+            output.write(
+                f"{SRTParser.seconds_to_srt_time(start)} --> "
+                f"{SRTParser.seconds_to_srt_time(end)}\n"
+            )
+            output.write(f"({offset:.3f}s) {subtitle.text}\n\n")
+
+    return output_path
+
 def create_silence(duration: float, output: Path, error_logger: Optional[ErrorLogger] = None):
     """Crea un archivo de audio con silencio"""
     try:
@@ -919,7 +997,7 @@ def show_usage_and_prompt():
     print(f"{Colors.CYAN}{'═' * 60}{Colors.NC}")
     print()
     print(f"{Colors.YELLOW}USO:{Colors.NC}")
-    print(f"  python3 create_video_tts_from_srt.py <archivo.srt> <video.mp4> [opciones]")
+    print(f"  python3 create_video_tts_from_srt.py <archivo.srt> [video.mp4] [opciones]")
     print()
     print(f"{Colors.YELLOW}EJEMPLOS:{Colors.NC}")
     print(f"  {Colors.GREEN}# Procesar video completo{Colors.NC}")
@@ -930,6 +1008,10 @@ def show_usage_and_prompt():
     print()
     print(f"  {Colors.GREEN}# Solo generar audio, sin video{Colors.NC}")
     print(f"  python3 create_video_tts_from_srt.py mi_video.srt mi_video.mp4 --solo-audio")
+    print(f"  # Atajo equivalente: python3 create_video_tts_from_srt.py mi_video.srt")
+    print()
+    print(f"  {Colors.GREEN}# No-truncate: conserva el texto y recupera desfase a {MAX_TTS_RATE} wpm{Colors.NC}")
+    print(f"  python3 create_video_tts_from_srt.py mi_video.srt mi_video.mp4 --no-truncate")
     print()
     print(f"  {Colors.GREEN}# Eliminar pausas largas del video{Colors.NC}")
     print(f"  python3 create_video_tts_from_srt.py mi_video.srt mi_video.mp4 --remove-breaks")
@@ -1409,6 +1491,8 @@ def main():
                        help="Solo generar audio, sin video")
     parser.add_argument("--no-freeze", action="store_true",
                        help="Truncar audios largos en lugar de freeze")
+    parser.add_argument("--no-truncate", action="store_true",
+                       help="Conservar audios completos y recuperar desfase a 240 wpm")
     parser.add_argument("--remove-breaks", action="store_true",
                        help="Eliminar pausas >15min del video final")
     parser.add_argument("--only-remove-breaks", action="store_true",
@@ -1447,8 +1531,12 @@ def main():
         # Sobrescribir args con datos del checkpoint
         args.srt_file = checkpoint['srt_file']
         args.video = checkpoint['video_file']
-        for key, value in checkpoint['parameters'].items():
+        checkpoint_params = checkpoint['parameters']
+        for key, value in checkpoint_params.items():
             setattr(args, key, value)
+        # Compatibilidad con checkpoints creados antes de renombrar la opción.
+        if checkpoint_params.get('experimental'):
+            args.no_truncate = True
 
     # Si se especifica --youtube, descargar video y subtítulos
     if hasattr(args, 'youtube') and args.youtube:
@@ -1478,6 +1566,10 @@ def main():
         else:
             sys.exit(0)
 
+    # Un SRT sin video es el atajo para generar únicamente el audio. El video
+    # homónimo .mp4 se conserva como referencia para nombres y checkpoints.
+    apply_audio_only_defaults(args)
+
     # Validar que se proporcionaron los argumentos requeridos
     if not args.srt_file or not args.video:
         print(f"{Colors.RED}Error: Se requieren los parámetros srt_file y video, o usar --youtube{Colors.NC}")
@@ -1503,13 +1595,8 @@ def main():
         print(f"{Colors.RED}Error: No existe {srt_path}{Colors.NC}")
         sys.exit(1)
 
-    # Buscar video con extensiones comunes
-    video_path = None
-    for ext in ['.mkv', '.mp4', '']:
-        test_path = Path(args.video).with_suffix(ext) if ext else Path(args.video)
-        if test_path.exists():
-            video_path = test_path
-            break
+    # En solo-audio no se lee el video: su ruta solo define los nombres de salida.
+    video_path = resolve_video_path(args.video, allow_missing=args.solo_audio)
 
     if not video_path:
         print(f"{Colors.RED}Error: No se encuentra el video{Colors.NC}")
@@ -1524,6 +1611,8 @@ def main():
         print(f"{Colors.CYAN}🎵 MODO SOLO-AUDIO: No se generará video{Colors.NC}")
     if args.no_freeze:
         print(f"{Colors.MAGENTA}🚫 MODO NO-FREEZE: Audios largos serán truncados{Colors.NC}")
+    if args.no_truncate:
+        print(f"{Colors.MAGENTA}🧪 MODO NO-TRUNCATE: Sin truncar; se recuperará desfase a {MAX_TTS_RATE} wpm{Colors.NC}")
     if args.remove_breaks:
         print(f"{Colors.MAGENTA}✂️  MODO REMOVE-BREAKS: Se eliminarán pausas >15min{Colors.NC}")
     if args.only_remove_breaks:
@@ -1592,6 +1681,7 @@ def main():
         'test': args.test,
         'solo_audio': args.solo_audio,
         'no_freeze': args.no_freeze,
+        'no_truncate': args.no_truncate,
         'remove_breaks': args.remove_breaks,
         'lang': language  # Guardar idioma en checkpoint
     }
@@ -1606,10 +1696,18 @@ def main():
     optimal_rate = 180
     learning_phase = True
     processed_count = 0
+    no_truncate_lag = 0.0
 
     srt_filename = Path(args.srt_file).name
 
     for idx, subtitle in enumerate(subtitles):
+        # El hueco hasta el siguiente subtítulo es la ventana de tiempo para
+        # este audio; el último usa su propia duración.
+        if idx + 1 < len(subtitles):
+            available_time = subtitles[idx + 1].start_seconds - subtitle.start_seconds
+        else:
+            available_time = subtitle.duration
+
         # Skip already processed subtitles when resuming
         if subtitle.consecutive_id <= last_processed_id:
             print(f"{Colors.CYAN}⏭️  Saltando subtítulo {subtitle.consecutive_id}/{len(subtitles)} (ya procesado){Colors.NC}")
@@ -1621,21 +1719,19 @@ def main():
                 audio_segments[subtitle.consecutive_id] = AudioSegment(
                     subtitle_id=subtitle.consecutive_id,
                     audio_file=audio_file,
-                    rate=180,  # Default, actual rate doesn't matter for skipped
+                    rate=MAX_TTS_RATE if args.no_truncate else 180,
                     needs_freeze=False,
-                    was_truncated=False
+                    was_truncated=False,
+                    timing_offset=no_truncate_lag
                 )
+                if args.no_truncate:
+                    no_truncate_lag = calculate_no_truncate_lag(
+                        no_truncate_lag, get_audio_duration(audio_file), available_time
+                    )
             continue
 
         # Limpiar texto HTML
         clean_text = re.sub(r'<[^>]*>', '', subtitle.text)
-
-        # Calcular tiempo disponible
-        if idx + 1 < len(subtitles):
-            next_subtitle = subtitles[idx + 1]
-            available_time = next_subtitle.start_seconds - subtitle.start_seconds
-        else:
-            available_time = subtitle.duration
 
         print(f"{Colors.YELLOW}{'━' * 50}{Colors.NC}")
         print(f"{Colors.YELLOW}📄 {srt_filename} - Subtítulo {subtitle.consecutive_id}/{len(subtitles)}{Colors.NC}")
@@ -1650,10 +1746,17 @@ def main():
             print(f"{Colors.MAGENTA}🎯 Usando rate aprendido: {current_rate} wpm{Colors.NC}")
 
         # Determinar rates a probar
-        if hasattr(args, 'fix_rate') and args.fix_rate:
+        fixed_rate = args.fix_rate if hasattr(args, 'fix_rate') and args.fix_rate else None
+        if args.no_truncate:
+            rate_list = get_no_truncate_rate_list(
+                current_rate, no_truncate_lag > 0.01, fixed_rate
+            )
+            if no_truncate_lag > 0.01:
+                print(f"{Colors.MAGENTA}🧪 Desfase acumulado: {no_truncate_lag:.3f}s; usando {MAX_TTS_RATE} wpm{Colors.NC}")
+        elif fixed_rate:
             # Si se especificó --fix-rate, usar solo ese rate
-            rate_list = [args.fix_rate]
-            print(f"{Colors.MAGENTA}🔒 Usando rate fijo: {args.fix_rate} wpm{Colors.NC}")
+            rate_list = [fixed_rate]
+            print(f"{Colors.MAGENTA}🔒 Usando rate fijo: {fixed_rate} wpm{Colors.NC}")
         elif args.no_freeze or args.solo_audio:
             rate_list = [current_rate, 200, 220, 240]
         else:
@@ -1678,20 +1781,30 @@ def main():
 
             print(f"  {Colors.BLUE}→ Duración: {audio_duration:.3f}s (diff: {diff:.3f}s){Colors.NC}")
 
-            if diff < 0.5:
+            # En no-truncate se conserva el audio completo a rate máximo,
+            # aunque aún no entre en la ventana del subtítulo.
+            if diff < 0.5 or (args.no_truncate and try_rate == MAX_TTS_RATE):
                 temp_audio.rename(audio_file)
                 audio_created = True
                 final_rate = try_rate
                 rate_usage[try_rate] += 1
-                print(f"  {Colors.GREEN}✅ Audio ajustado con rate {try_rate}{Colors.NC}")
+                if args.no_truncate and diff >= 0.5:
+                    print(f"  {Colors.YELLOW}🧪 Audio completo conservado; continuará el desfase{Colors.NC}")
+                else:
+                    print(f"  {Colors.GREEN}✅ Audio ajustado con rate {try_rate}{Colors.NC}")
 
                 audio_segments[subtitle.consecutive_id] = AudioSegment(
                     subtitle_id=subtitle.consecutive_id,
                     audio_file=audio_file,
                     rate=try_rate,
                     needs_freeze=False,
-                    was_truncated=False
+                    was_truncated=False,
+                    timing_offset=no_truncate_lag
                 )
+                if args.no_truncate:
+                    no_truncate_lag = calculate_no_truncate_lag(
+                        no_truncate_lag, audio_duration, available_time
+                    )
                 break
             else:
                 temp_audio.unlink()
@@ -1701,7 +1814,10 @@ def main():
             # Determinar si se está forzando un rate fijo
             is_fixed_rate = hasattr(args, 'fix_rate') and args.fix_rate
 
-            if args.no_freeze or args.solo_audio:
+            if args.no_truncate:
+                print(f"{Colors.RED}❌ No se pudo generar el audio completo a {MAX_TTS_RATE} wpm{Colors.NC}")
+                sys.exit(1)
+            elif args.no_freeze or args.solo_audio:
                 # En modo truncate, usar el rate fijo o 240 si no hay rate fijo
                 truncate_rate = args.fix_rate if is_fixed_rate else 240
                 print(f"  {Colors.YELLOW}⚠️  Audio muy largo, generando con rate {truncate_rate} y truncando{Colors.NC}")
@@ -1805,7 +1921,10 @@ def main():
     truncated_count = sum(1 for seg in audio_segments.values() if seg.was_truncated)
 
     print(f"{Colors.GREEN}Total subtítulos: {len(subtitles)}{Colors.NC}")
-    if args.no_freeze or args.solo_audio:
+    if args.no_truncate:
+        print(f"{Colors.YELLOW}Desfase final pendiente: {no_truncate_lag:.3f}s{Colors.NC}")
+        print(f"{Colors.GREEN}Audios completos, sin truncar: {len(subtitles)}{Colors.NC}")
+    elif args.no_freeze or args.solo_audio:
         print(f"{Colors.YELLOW}Audios truncados: {truncated_count}{Colors.NC}")
         print(f"{Colors.GREEN}Sin truncar: {len(subtitles) - truncated_count}{Colors.NC}")
     else:
@@ -1826,17 +1945,20 @@ def main():
             if not segment:
                 continue
 
-            new_start = subtitle.start_seconds + time_offset
-            new_end = subtitle.end_seconds + time_offset
+            offset = segment.timing_offset if args.no_truncate else time_offset
+            new_start = subtitle.start_seconds + offset
+            new_end = subtitle.end_seconds + offset
 
             new_start_time = SRTParser.seconds_to_srt_time(new_start)
             new_end_time = SRTParser.seconds_to_srt_time(new_end)
 
             rate = segment.rate
-            offset_ms = int(time_offset * 1000)
+            offset_ms = int(offset * 1000)
 
             # Construir texto con metadatos
-            if segment.was_truncated:
+            if args.no_truncate and offset > 0.01:
+                new_text = f"[#{subtitle.consecutive_id} r{rate} +{offset_ms}ms] [🧪 DESFASE] {subtitle.text}"
+            elif segment.was_truncated:
                 if time_offset > 0:
                     new_text = f"[#{subtitle.consecutive_id} r{rate} +{offset_ms}ms] [✂️ TRUNCADO] {subtitle.text}"
                 else:
@@ -1859,6 +1981,10 @@ def main():
             f.write("\n")
 
     print(f"{Colors.GREEN}✅ Archivo SRT debug generado: {debug_srt}{Colors.NC}")
+
+    if args.no_truncate:
+        test_srt = create_no_truncate_test_srt(srt_path, subtitles, audio_segments)
+        print(f"{Colors.GREEN}✅ SRT ajustado al audio generado: {test_srt}{Colors.NC}")
 
     # PASO 4: Procesar video
     print(f"{Colors.BLUE}{'═' * 50}{Colors.NC}")
@@ -2282,7 +2408,9 @@ def main():
             os_name = "macOS"
 
         # Determinar si se usó freeze o no
-        if args.no_freeze or args.solo_audio:
+        if args.no_truncate:
+            freeze_status = "no-truncate"
+        elif args.no_freeze or args.solo_audio:
             freeze_status = "nofreeze"
         else:
             # Verificar si realmente se usó freeze en algún segmento
@@ -2299,11 +2427,32 @@ def main():
             print(f"{Colors.CYAN}ℹ Generando nuevo archivo: {output_video.name}{Colors.NC}")
 
         try:
+            merge_command = [
+                "ffmpeg", "-i", str(video_to_use), "-i", str(audio_final),
+            ]
+            if args.no_truncate:
+                video_padding = calculate_required_video_padding(
+                    get_audio_duration(video_to_use), get_audio_duration(audio_final)
+                )
+                if video_padding > 0.01:
+                    print(f"{Colors.MAGENTA}🧪 Extendiendo último frame {video_padding:.3f}s para conservar el audio{Colors.NC}")
+                    merge_command.extend([
+                        "-filter_complex",
+                        f"[0:v]tpad=stop_mode=clone:stop_duration={video_padding:.6f}[video]",
+                        "-map", "[video]",
+                    ])
+                else:
+                    merge_command.extend(["-map", "0:v:0"])
+            else:
+                merge_command.extend(["-map", "0:v:0"])
+
+            merge_command.extend([
+                "-map", "1:a:0",
+                "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-b:a", "192k",
+                "-shortest", str(output_video), "-y",
+            ])
             result = subprocess.run(
-                ["ffmpeg", "-i", str(video_to_use), "-i", str(audio_final),
-                 "-map", "0:v:0", "-map", "1:a:0",
-                 "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-b:a", "192k",
-                 "-shortest", str(output_video), "-y"],
+                merge_command,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
