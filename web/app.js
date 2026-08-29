@@ -6,6 +6,11 @@ const srtFile = $('#srtFile');
 const videoFile = $('#videoFile');
 const localSrt = $('#localSrt');
 const localVideo = $('#localVideo');
+const backendBase = $('#backendBase');
+backendBase.value = location.origin;
+let activeBackendBase = backendBase.value;
+const backendUrl = path => new URL(path, backendBase.value || location.origin).toString();
+const backendFileUrl = url => new URL(url, backendBase.value || location.origin).toString();
 const outputFiles = () => $('#results');
 const audioExtensions = new Set(['wav', 'aac', 'mp3', 'ogg', 'm4a']);
 const videoExtensions = new Set(['mp4', 'mkv', 'mov', 'avi', 'webm']);
@@ -80,6 +85,18 @@ function createSubtitleViewer(subtitle, cues) {
   return wrapper;
 }
 
+function seekPlayerToCue(player, cue) {
+  const seek = () => {
+    if (!Number.isFinite(cue.start)) return;
+    const maxTime = Number.isFinite(player.duration) ? Math.max(0, player.duration - 0.01) : cue.start;
+    player.currentTime = Math.min(Math.max(0, cue.start), maxTime);
+    const playback = player.play();
+    if (playback) playback.catch(() => {});
+  };
+  if (player.readyState < 1) player.addEventListener('loadedmetadata', seek, {once: true});
+  else seek();
+}
+
 function createSyncedPlayer(media, cues) {
   const wrapper = document.createElement('section');
   wrapper.className = 'viewer';
@@ -91,7 +108,7 @@ function createSyncedPlayer(media, cues) {
   player.src = media.url;
   const subtitleTitle = document.createElement('h3');
   subtitleTitle.textContent = cues.length ? '📝 Subtítulos sincronizados' : '📝 Elegí un archivo SRT para ver sus cues';
-  const {cueList, rows} = createCueList(cues, cue => { player.currentTime = cue.start; player.play(); });
+  const {cueList, rows} = createCueList(cues, cue => seekPlayerToCue(player, cue));
   let activeCue;
   player.ontimeupdate = () => {
     const row = rows.find(({cue}) => player.currentTime >= cue.start && player.currentTime < cue.end);
@@ -104,7 +121,7 @@ function createSyncedPlayer(media, cues) {
   wrapper.append(title, player, subtitleTitle, cueList);
   return wrapper;
 }
-window.VideoTTS = {parseSrt, createSyncedPlayer};
+window.VideoTTS = {parseSrt, createSyncedPlayer, seekPlayerToCue};
 
 async function fetchCues(file) {
   if (!file || fileKind(file) !== 'subtitle') return [];
@@ -164,7 +181,7 @@ async function renderResults(files) {
 }
 
 async function poll(id) {
-  const response = await fetch('/status?id=' + encodeURIComponent(id));
+  const response = await fetch(backendUrl('/status?id=' + encodeURIComponent(id)));
   const status = await response.json();
   logs.textContent = status.output || status.error || '';
   if ($('#autoScroll').checked) logs.scrollTop = logs.scrollHeight;
@@ -176,7 +193,7 @@ async function poll(id) {
   }
   if (!status.done) return setTimeout(() => poll(id), 700);
   progressLabel.textContent = match ? progressLabel.textContent : '✅ Procesamiento finalizado';
-  renderResults(status.files || []);
+  renderResults((status.files || []).map(file => ({...file, url: backendFileUrl(file.url)})));
 }
 
 function selectedOrUploaded(input) { return input.dataset.local ? {local: input.dataset.local} : readFile(input.files[0]); }
@@ -192,19 +209,32 @@ $('#f').onsubmit = async event => {
   options.test_count = Number(options.test_count || 30);
   const selectedVideo = await selectedOrUploaded(videoFile);
   if (options.fix_rate_not_truncate && selectedVideo) { logs.textContent = 'El modo audio plano solo se puede usar sin video.'; return; }
-  const response = await fetch('/run', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({srt, video: selectedVideo, opts: options})});
+  const response = await fetch(backendUrl('/run'), {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({srt, video: selectedVideo, opts: options})});
   const job = await response.json();
   if (!job.id) { logs.textContent = 'Error: ' + (job.error || 'No se pudo crear el trabajo'); return; }
   poll(job.id);
 };
 
 function populate(select, names) { names.forEach(name => select.add(new Option(name, name))); }
-fetch('/info')
-  .then(response => response.ok ? response.json() : Promise.reject(new Error('No se pudo obtener la versión')))
-  .then(info => { $('#appVersion').textContent = `v${info.version}`; })
-  .catch(() => { $('#appVersion').hidden = true; });
-fetch('/files').then(response => response.json()).then(files => { populate(localSrt, files.srt); populate(localVideo, files.video); });
-fetch('/options').then(response => response.json()).then(options => $('#options').replaceChildren(...options.map(option => {
+const shellQuote = value => /^[\w./:-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
+function updateCliCommand() {
+  const form = new FormData($('#f'));
+  const srt = localSrt.value || srtFile.files[0]?.name || '<archivo.srt>';
+  const video = localVideo.value || videoFile.files[0]?.name;
+  const fixedRate = form.get('fix_rate_not_truncate') === 'on';
+  const args = ['python3', 'create_video_tts_from_srt.py', srt];
+  if (video && !fixedRate) args.push(video);
+  args.push('--lang', form.get('lang') || 'es');
+  if (form.get('test') === 'on') args.push('--test', form.get('test_count') || '30');
+  if (fixedRate) {
+    args.push('--fix-rate-not-truncate', form.get('fix_rate_not_truncate_rate') || '200');
+    args.push('--fix-rate-not-truncate-pause', form.get('fix_rate_not_truncate_pause') || '1000');
+  }
+  ['solo_audio', 'no_truncate', 'optimize_rate', 'no_freeze', 'remove_breaks', 'only_remove_breaks']
+    .filter(name => form.get(name) === 'on').forEach(name => args.push(`--${name.replaceAll('_', '-')}`));
+  $('#cliCommand').textContent = args.map(shellQuote).join(' ');
+}
+function renderOptions(options) { $('#options').replaceChildren(...options.map(option => {
   const label = document.createElement('label');
   const input = document.createElement('input');
   input.name = option.name; input.type = 'checkbox';
@@ -222,15 +252,30 @@ fetch('/options').then(response => response.json()).then(options => $('#options'
     label.append(' · Pausa entre líneas (ms): ', pause);
   }
   return label;
-})));
-localSrt.onchange = () => { srtFile.dataset.local = localSrt.value; };
-localVideo.onchange = () => { videoFile.dataset.local = localVideo.value; };
+})); updateCliCommand(); }
+localSrt.onchange = () => { srtFile.dataset.local = localSrt.value; updateCliCommand(); };
+localVideo.onchange = () => { videoFile.dataset.local = localVideo.value; updateCliCommand(); };
+srtFile.onchange = updateCliCommand;
+videoFile.onchange = updateCliCommand;
+$('#f').addEventListener('input', updateCliCommand);
+$('#f').addEventListener('change', updateCliCommand);
+$('#copyCliCommand').onclick = async () => {
+  const command = $('#cliCommand').textContent;
+  if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(command);
+  else {
+    const textarea = document.createElement('textarea');
+    textarea.value = command; document.body.append(textarea); textarea.select(); document.execCommand('copy'); textarea.remove();
+  }
+  $('#copyCliCommand').textContent = '✅ Copiado';
+  setTimeout(() => { $('#copyCliCommand').textContent = 'Copiar comando'; }, 1500);
+};
+updateCliCommand();
 $('#drop').ondragover = event => event.preventDefault();
 $('#drop').ondrop = event => { event.preventDefault(); for (const file of event.dataTransfer.files) { if (/\.srt$/i.test(file.name)) srtFile.files = event.dataTransfer.files; else if (file.type.startsWith('video/')) videoFile.files = event.dataTransfer.files; } };
 
 
 const apiEndpoint = $('#apiEndpoint');
-apiEndpoint.value = `${location.origin}/api/generate-audio`;
+apiEndpoint.value = backendUrl('/api/generate-audio');
 const apiTts = $('#apiTts');
 const apiLang = $('#apiLang');
 const apiVoice = $('#apiVoice');
@@ -291,7 +336,31 @@ async function loadAvailableTts() {
   }
 }
 apiEndpoint.addEventListener('change', loadAvailableTts);
-loadAvailableTts();
+async function refreshBackend() {
+  const previousApiEndpoint = apiEndpoint.value;
+  const oldDefault = new URL('/api/generate-audio', activeBackendBase || location.origin).toString();
+  try {
+    const info = await fetch(backendUrl('/info')).then(response => response.ok ? response.json() : Promise.reject());
+    $('#appVersion').textContent = `v${info.version}`;
+    $('#appVersion').hidden = false;
+    const files = await fetch(backendUrl('/files')).then(response => response.json());
+    delete srtFile.dataset.local;
+    delete videoFile.dataset.local;
+    localSrt.replaceChildren(new Option('SRT de esta carpeta…', '')); populate(localSrt, files.srt || []);
+    localVideo.replaceChildren(new Option('Video de esta carpeta…', '')); populate(localVideo, files.video || []);
+    const options = await fetch(backendUrl('/options')).then(response => response.json());
+    renderOptions(options);
+    if (!previousApiEndpoint || previousApiEndpoint === oldDefault) apiEndpoint.value = backendUrl('/api/generate-audio');
+    activeBackendBase = backendBase.value;
+    await loadAvailableTts();
+  } catch (error) {
+    logs.textContent = 'No se pudo conectar al backend seleccionado. Verificá la URL y CORS.';
+    $('#appVersion').hidden = true;
+  }
+}
+backendBase.addEventListener('change', refreshBackend);
+$('#reloadBackend').onclick = refreshBackend;
+refreshBackend();
 $('#apiTestForm').onsubmit = async event => {
   event.preventDefault();
   const result = $('#apiResult');

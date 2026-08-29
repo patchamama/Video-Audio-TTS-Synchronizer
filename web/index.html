@@ -9,6 +9,7 @@
 <body>
   <main>
     <header class="app-header"><span class="app-icon">🎙️</span><div><h1>Video TTS <span id="appVersion" class="version-badge" aria-label="Versión del programa"></span></h1><p>Generá, revisá y sincronizá tu audio.</p></div><a id="minimalMode" class="mode-link" href="/minimal">🪶 Vista mínima</a></header>
+    <label class="backend-selector">🔌 Backend API <input id="backendBase" type="url" aria-label="URL base del backend API"><button id="reloadBackend" type="button">Conectar</button></label>
     <form id="f">
       <div id="drop">📥 Arrastrá un <strong>SRT</strong> o <strong>video</strong> acá, o seleccioná archivos</div>
       <fieldset><legend>📝 Subtítulos</legend><select id="localSrt"><option value="">SRT de esta carpeta…</option></select><input id="srtFile" name="srt" type="file" accept=".srt"></fieldset>
@@ -38,6 +39,12 @@
         <button>Generar audio de prueba</button>
       </form>
       <div id="apiResult" aria-live="polite"></div>
+    </details>
+    <details id="cliPreview" class="api-test">
+      <summary>⌨️ Ver comando CLI equivalente</summary>
+      <p>Usa las opciones seleccionadas arriba. Los archivos subidos deben existir en la carpeta desde donde ejecutes el comando.</p>
+      <pre><code id="cliCommand"></code></pre>
+      <button id="copyCliCommand" type="button">Copiar comando</button>
     </details>
     <div id="results"></div>
   </main>

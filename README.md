@@ -1253,7 +1253,7 @@ wget https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/m
 ---
 
 **Última actualización:** 2026-08-28
-**Versión:** 2.4.0 (Python rewrite)
+**Versión:** 2.7.1 (Python rewrite)
 
 La versión se incrementa en cada actualización publicada siguiendo [Semantic Versioning](https://semver.org/lang/es/).
 
@@ -1267,6 +1267,10 @@ python3 create_video_tts_from_srt.py --web
 ```
 
 Sin parámetros, el script muestra la URL y abre la interfaz local `http://127.0.0.1:8765`. La UI permite cargar SRT, video opcional, idioma y las opciones de audio disponibles; el backend local ejecuta el mismo CLI.
+
+La interfaz avanzada permite cambiar **Backend API**. Por defecto usa el backend local de la misma URL (`http://127.0.0.1:8765`); al conectarte a otro backend, recarga versión, archivos, opciones, TTS e idiomas desde esa API. Un backend externo debe permitir CORS desde el origen donde se sirve la interfaz.
+
+Debajo de la prueba de endpoint, la sección contraída **«Ver comando CLI equivalente»** construye y permite copiar la línea de terminal según los archivos y opciones seleccionadas en la interfaz.
 
 ### API local de generación de audio
 

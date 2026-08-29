@@ -28,6 +28,24 @@ def test_frontend_filters_tts_using_selected_language():
     assert 'apiLang.onchange = renderTtsForLanguage' in script
     assert 'renderVoicesForTts' in script
     assert 'voice: apiVoice.value || undefined' in script
+    assert "backendBase.value = location.origin" in script
+    assert 'backendUrl(\'/run\')' in script
+    assert 'refreshBackend();' in script
+    assert 'function updateCliCommand()' in script
+    assert "'--fix-rate-not-truncate'" in script
+    assert 'function seekPlayerToCue(player, cue)' in script
+    assert "addEventListener('loadedmetadata', seek" in script
+
+
+def test_minimal_view_is_served_by_backend_not_web_assets():
+    source = (Path(__file__).parent.parent / 'create_video_tts_from_srt.py').read_text(encoding='utf-8')
+    assert "if parsed.path == '/minimal':" in source
+    assert "Location', '/web/index.html?mode=minimal" not in source
+    assert 'id=minimalForm' in source
+    assert "fetch('/run'" in source
+    assert "fetch('/info')" in source
+    assert "fetch('/files')" in source
+    assert "fetch('/options')" in source
 
 
 def test_private_asset_fetch_uses_github_token(monkeypatch=None):
