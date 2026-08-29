@@ -11,6 +11,7 @@ const backendBase = $('#backendBase');
 const tempDirectory = $('#tempDirectory');
 const uiLanguage = $('#uiLanguage');
 const themeToggle = $('#themeToggle');
+const resetPreferences = $('#resetPreferences');
 backendBase.value = location.origin;
 let activeBackendBase = backendBase.value;
 const backendUrl = path => new URL(path, backendBase.value || location.origin).toString();
@@ -35,10 +36,35 @@ if (isMinimalMode) {
 const subtitleProgress = output => [...output.matchAll(/Subtítulo\s+(\d+)\/(\d+)/gi)].pop();
 const storageGet = key => { try { return localStorage.getItem(key); } catch (_) { return null; } };
 const storageSet = (key, value) => { try { localStorage.setItem(key, value); } catch (_) {} };
+const PREFERENCES_KEY = 'videoTtsPreferences';
+const readPreferences = () => { try { return JSON.parse(storageGet(PREFERENCES_KEY) || '{}'); } catch (_) { return {}; } };
+const controlKey = control => control.id ? `#${control.id}` : control.name ? `name:${control.name}` : '';
+function savePreferences() {
+  const controls = {};
+  document.querySelectorAll('input, select, textarea, details').forEach(control => {
+    if (control.type === 'file') return;
+    const key = controlKey(control);
+    if (!key) return;
+    controls[key] = control.tagName === 'DETAILS' ? control.open : control.type === 'checkbox' ? control.checked : control.value;
+  });
+  storageSet(PREFERENCES_KEY, JSON.stringify({controls}));
+}
+function restorePreferences() {
+  const {controls = {}} = readPreferences();
+  document.querySelectorAll('input, select, textarea, details').forEach(control => {
+    if (control.type === 'file') return;
+    const key = controlKey(control);
+    if (!key || !(key in controls)) return;
+    const value = controls[key];
+    if (control.tagName === 'DETAILS') control.open = Boolean(value);
+    else if (control.type === 'checkbox') control.checked = Boolean(value);
+    else if (control.tagName !== 'SELECT' || [...control.options].some(option => option.value === value)) control.value = value;
+  });
+}
 
 const interfaceText = {
-  en: {tagline: 'Generate, review and synchronize your audio.', notes: '📝 Notes', process: '✨ Process', subtitles: '📝 Subtitles', language: '🌐 Language', test: '🧪 Test mode · Entries:', reuse: '♻️ Reuse temporary audio', noReuse: 'Do not reuse audio…', minimal: '🪶 Minimal view', connect: 'Connect', results: '✨ Results', resultHelp: 'Select an audio, video or SRT to open it in the synced viewer.', selectAll: '☑️ Select all', deselectAll: '☐ Deselect all', downloadSelected: '⬇️ Download selected', deleteSelected: '🗑️ Delete selected', deleteTempFolders: '🧹 Delete temporary folders', selected: count => `${count} selected`, viewer: 'Viewer:', synced: '📝 Synced subtitles', chooseSrt: '📝 Select an SRT file to view its cues', subtitleViewer: '📝 Subtitles:', folderSrt: 'SRT from this folder…', folderVideo: 'Video from this folder…', open: 'Open', download: 'Download', delete: 'Delete', rate: 'Rate', pause: 'Pause between lines (ms)'},
-  es: {tagline: 'Generá, revisá y sincronizá tu audio.', notes: '📝 Notas', process: '✨ Procesar', subtitles: '📝 Subtítulos', language: '🌐 Idioma', test: '🧪 Modo test · Entradas:', reuse: '♻️ Reutilizar audio temporal', noReuse: 'No reutilizar audio…', minimal: '🪶 Vista mínima', connect: 'Conectar', results: '✨ Resultados', resultHelp: 'Seleccioná un audio, video o SRT para abrirlo en el visor sincronizado.', selectAll: '☑️ Seleccionar todo', deselectAll: '☐ Deseleccionar todo', downloadSelected: '⬇️ Descargar seleccionados', deleteSelected: '🗑️ Borrar seleccionados', deleteTempFolders: '🧹 Eliminar carpetas temporales', selected: count => `${count} seleccionado${count === 1 ? '' : 's'}`, viewer: 'Visor:', synced: '📝 Subtítulos sincronizados', chooseSrt: '📝 Elegí un archivo SRT para ver sus cues', subtitleViewer: '📝 Subtítulos:', folderSrt: 'SRT de esta carpeta…', folderVideo: 'Video de esta carpeta…', open: 'Abrir', download: 'Descargar', delete: 'Borrar', rate: 'Rate', pause: 'Pausa entre líneas (ms)'}
+  en: {tagline: 'Generate, review and synchronize your audio.', notes: '📝 Notes', process: '✨ Process', subtitles: '📝 Subtitles', language: '🌐 Language', test: '🧪 Test mode · Entries:', reuse: '♻️ Reuse temporary audio', noReuse: 'Do not reuse audio…', minimal: '🪶 Minimal view', connect: 'Connect', reset: '↺ Reset', results: '✨ Results', resultHelp: 'Select an audio, video or SRT to open it in the synced viewer.', selectAll: '☑️ Select all', deselectAll: '☐ Deselect all', downloadSelected: '⬇️ Download selected', deleteSelected: '🗑️ Delete selected', deleteTempFolders: '🧹 Delete temporary folders', selected: count => `${count} selected`, viewer: 'Viewer:', synced: '📝 Synced subtitles', chooseSrt: '📝 Select an SRT file to view its cues', subtitleViewer: '📝 Subtitles:', folderSrt: 'SRT from this folder…', folderVideo: 'Video from this folder…', open: 'Open', download: 'Download', delete: 'Delete', rate: 'Rate', pause: 'Pause between lines (ms)'},
+  es: {tagline: 'Generá, revisá y sincronizá tu audio.', notes: '📝 Notas', process: '✨ Procesar', subtitles: '📝 Subtítulos', language: '🌐 Idioma', test: '🧪 Modo test · Entradas:', reuse: '♻️ Reutilizar audio temporal', noReuse: 'No reutilizar audio…', minimal: '🪶 Vista mínima', connect: 'Conectar', reset: '↺ Restablecer', results: '✨ Resultados', resultHelp: 'Seleccioná un audio, video o SRT para abrirlo en el visor sincronizado.', selectAll: '☑️ Seleccionar todo', deselectAll: '☐ Deseleccionar todo', downloadSelected: '⬇️ Descargar seleccionados', deleteSelected: '🗑️ Borrar seleccionados', deleteTempFolders: '🧹 Eliminar carpetas temporales', selected: count => `${count} seleccionado${count === 1 ? '' : 's'}`, viewer: 'Visor:', synced: '📝 Subtítulos sincronizados', chooseSrt: '📝 Elegí un archivo SRT para ver sus cues', subtitleViewer: '📝 Subtítulos:', folderSrt: 'SRT de esta carpeta…', folderVideo: 'Video de esta carpeta…', open: 'Abrir', download: 'Descargar', delete: 'Borrar', rate: 'Rate', pause: 'Pausa entre líneas (ms)'}
 };
 const tr = key => (interfaceText[uiLanguage?.value || 'en'] || interfaceText.en)[key] || key;
 function applyInterfaceLanguage(language = 'en') {
@@ -57,6 +83,7 @@ function applyInterfaceLanguage(language = 'en') {
   if (tempDirectory?.options?.[0]) tempDirectory.options[0].textContent = text.noReuse;
   if (!isMinimalMode) setText('#minimalMode', text.minimal);
   setText('#reloadBackend', text.connect);
+  setText('#resetPreferences', text.reset);
   if (backendOptions.length) renderOptions(backendOptions);
   if (existingResults.length) void renderResults(existingResults);
   storageSet('videoTtsLanguage', language);
@@ -68,10 +95,18 @@ function applyTheme(theme) {
 }
 const savedLanguage = storageGet('videoTtsLanguage') || 'en';
 if (uiLanguage) uiLanguage.value = savedLanguage;
-applyInterfaceLanguage(savedLanguage);
+restorePreferences();
+activeBackendBase = backendBase.value;
+applyInterfaceLanguage(uiLanguage?.value || savedLanguage);
 applyTheme(storageGet('videoTtsTheme') || 'light');
 if (uiLanguage) uiLanguage.onchange = () => applyInterfaceLanguage(uiLanguage.value);
 if (themeToggle) themeToggle.onclick = () => applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+if (resetPreferences) resetPreferences.onclick = () => {
+  try { localStorage.removeItem(PREFERENCES_KEY); localStorage.removeItem('videoTtsLanguage'); localStorage.removeItem('videoTtsTheme'); } catch (_) {}
+  location.reload();
+};
+document.addEventListener('input', savePreferences);
+document.addEventListener('change', savePreferences);
 
 function setFaviconProgress(percent) {
   const value = Number.isFinite(percent) ? Math.max(0, Math.min(100, Math.round(percent))) : null;
@@ -453,7 +488,14 @@ const mainVoice = $('#mainVoice');
 const mainLang = $('#f select[name="lang"]');
 const apiVoiceTest = $('#apiVoiceTest');
 const mainVoiceTest = $('#mainVoiceTest');
-const voiceTestText = 'This is a short voice sample for Video TTS.';
+const voiceTestText = language => ({
+  es: 'Esta es una breve prueba de voz para Video TTS.',
+  en: 'This is a short voice sample for Video TTS.',
+  de: 'Dies ist eine kurze Sprachprobe für Video TTS.',
+  fr: 'Ceci est un court échantillon vocal pour Video TTS.',
+  it: 'Questo è un breve esempio vocale per Video TTS.',
+  pt: 'Este é um breve exemplo de voz para Video TTS.',
+}[language] || 'This is a short voice sample for Video TTS.');
 const voiceLanguage = voice => String(voice.language || voice.locale || '').toLowerCase().split(/[-_]/)[0];
 const languageName = (code, names = {}) => names[code] || code.toUpperCase();
 let availableTts = [];
@@ -530,7 +572,7 @@ async function testVoice({tts, voice, lang}, button) {
   const original = button.textContent;
   button.disabled = true; button.textContent = '⏳ Testing voice…';
   try {
-    const response = await fetch(apiEndpoint.value, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: voiceTestText, lang, tts: tts || undefined, voice: voice || undefined, rate: 180, fixed_rate: true, pause_ms: 0})});
+    const response = await fetch(apiEndpoint.value, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: voiceTestText(lang), lang, tts: tts || undefined, voice: voice || undefined, rate: 180, fixed_rate: true, pause_ms: 0})});
     const generated = await response.json();
     if (!response.ok) throw new Error(generated.error || 'Could not generate voice test');
     const audio = new Audio(new URL(generated.audio.url, apiEndpoint.value).toString());
@@ -583,6 +625,11 @@ async function refreshBackend() {
     if (!previousApiEndpoint || previousApiEndpoint === oldDefault) apiEndpoint.value = backendUrl('/api/generate-audio');
     activeBackendBase = backendBase.value;
     await loadAvailableTts();
+    restorePreferences();
+    renderVoicesForTts();
+    renderMainVoices();
+    restorePreferences();
+    updateCliCommand();
   } catch (error) {
     logs.textContent = 'No se pudo conectar al backend seleccionado. Verificá la URL y CORS.';
     $('#appVersion').hidden = true;

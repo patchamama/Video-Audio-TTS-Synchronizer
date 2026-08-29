@@ -64,11 +64,15 @@ def test_frontend_filters_tts_using_selected_language():
     assert "/favicon.svg?progress=" in script
     assert 'applyTheme' in script
     assert 'applyInterfaceLanguage' in script
+    assert "PREFERENCES_KEY = 'videoTtsPreferences'" in script
+    assert 'savePreferences' in script and 'restorePreferences' in script
+    assert 'resetPreferences' in script
     assert "'--youtube'" in script
     assert 'tempDirectory' in script
     assert 'apiVoiceTest' in script
     assert 'voiceLanguage' in script
     assert 'voiceTestText' in script
+    assert 'voiceTestText(lang)' in script
     assert 'renderMainTts' in script
     assert 'renderMainVoices' in script
     assert 'mainVoiceTest' in script

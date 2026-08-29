@@ -4,7 +4,7 @@ Sistema inteligente de sincronización de audio TTS (Text-to-Speech) con video a
 
 ## ⚡ Instalación rápida desde CLI
 
-Sin `git clone`: descargá el lanzador, ejecutalo y este descarga/actualiza el archivo Python y la interfaz `web/`, crea `.venv` local e instala los requisitos. Sin parámetros abre la web; cualquier parámetro se reenvía al programa.
+Sin `git clone`: descargá el lanzador y ejecutalo; este descarga **solo los archivos faltantes** del archivo Python y la interfaz `web/`, crea `.venv` local e instala los requisitos sin sobrescribir cambios locales. Sin parámetros abre la web; cualquier parámetro se reenvía al programa.
 
 **macOS / Linux:** `curl -fsSLO https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/main/start_video_tts.sh && chmod +x start_video_tts.sh && ./start_video_tts.sh`
 
@@ -15,6 +15,8 @@ Ejemplo CLI: `./start_video_tts.sh --youtube ULKkrkIJ0h8 --lang de` (Windows: `s
 En **Test audio generation endpoint**, las voces instaladas se filtran por el TTS y el idioma elegidos; **Test selected voice** genera una muestra breve reproducible y con reproducción automática; si el TTS no ofrece voces instaladas, prueba su voz predeterminada.
 
 El formulario principal también permite elegir **TTS** y **Installed voice**; ambos se envían como `--tts` y `--voice` para generar el audio desde los subtítulos con el motor elegido. La respuesta de `/run` también incluye el comando generado para auditar los parámetros enviados. La interfaz EN/ES traduce también los parámetros enviados por `/options` y los paneles dinámicos de resultados y visor. Al seleccionar una voz instalada aparece **Test** a su derecha para escuchar una muestra breve.
+
+Las opciones del frontend se conservan en el navegador mediante `localStorage`; el botón **Reset** elimina esas preferencias y restaura los valores predeterminados al recargar la página.
 
 ## 📋 Tabla de Contenidos
 
@@ -1267,13 +1269,13 @@ wget https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/m
 ---
 
 **Última actualización:** 2026-08-28
-**Versión:** 2.26.0 (Python rewrite)
+**Versión:** 2.29.0 (Python rewrite)
 
 La versión se incrementa en cada actualización publicada siguiendo [Semantic Versioning](https://semver.org/lang/es/).
 
 ## Instalación y interfaz web autónomas
 
-El archivo `create_video_tts_from_srt.py` incorpora `--install-dependencies` para instalar FFmpeg y los paquetes Python requeridos según el sistema operativo. Los lanzadores `start_video_tts.sh` y `start_video_tts.bat` crean un entorno `.venv`, instalan `requirements.txt`, actualizan los assets desde GitHub y reenvían parámetros al programa.
+El archivo `create_video_tts_from_srt.py` incorpora `--install-dependencies` para instalar FFmpeg y los paquetes Python requeridos según el sistema operativo. Los lanzadores `start_video_tts.sh` y `start_video_tts.bat` crean un entorno `.venv`, instalan `requirements.txt`, descargan solo los assets faltantes desde GitHub y reenvían parámetros al programa.
 
 ```bash
 ./start_video_tts.sh
