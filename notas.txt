@@ -1,1 +1,2 @@
-- [ ] test
+- [ ] Testear Eleven Labs TTS
+- [ ] Probar join de subtitulos al descarse de youtube y traductor automático
