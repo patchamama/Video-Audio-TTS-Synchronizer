@@ -231,12 +231,75 @@ $('#drop').ondrop = event => { event.preventDefault(); for (const file of event.
 
 const apiEndpoint = $('#apiEndpoint');
 apiEndpoint.value = `${location.origin}/api/generate-audio`;
+const apiTts = $('#apiTts');
+const apiLang = $('#apiLang');
+const apiVoice = $('#apiVoice');
+const languageName = (code, names = {}) => names[code] || code.toUpperCase();
+let availableTts = [];
+let apiLanguageNames = {};
+function setAvailableLanguages(languages, languageNames) {
+  const previous = apiLang.value;
+  if (!languages.length) return;
+  apiLang.replaceChildren(...languages.map(code => new Option(languageName(code, languageNames), code)));
+  apiLang.value = languages.includes(previous) ? previous : languages.includes('es') ? 'es' : languages[0];
+}
+function renderTtsForLanguage() {
+  const previous = apiTts.value;
+  const compatible = availableTts.filter(engine => engine.languages.includes(apiLang.value));
+  if (!compatible.length) {
+    apiTts.replaceChildren(new Option('No hay TTS instalado para este idioma', ''));
+    apiTts.disabled = true;
+    return;
+  }
+  apiTts.replaceChildren(...compatible.map(engine => {
+    const state = engine.offline ? 'sin conexión' : 'requiere Internet';
+    const voices = engine.voices?.filter(voice => voice.language === apiLang.value).length || 0;
+    const detail = voices ? ` · ${voices} voces instaladas` : '';
+    return new Option(`${engine.label} (${state}${detail})`, engine.id);
+  }));
+  apiTts.value = compatible.some(engine => engine.id === previous) ? previous : compatible[0].id;
+  apiTts.disabled = false;
+  renderVoicesForTts();
+}
+function renderVoicesForTts() {
+  const engine = availableTts.find(item => item.id === apiTts.value);
+  const voices = engine?.voices?.filter(voice => voice.language === apiLang.value) || [];
+  if (!voices.length) {
+    apiVoice.replaceChildren(new Option('El TTS usa su voz predeterminada', ''));
+    apiVoice.disabled = true;
+    return;
+  }
+  apiVoice.replaceChildren(...voices.map(voice => new Option(`${voice.name} (${voice.locale})`, voice.id)));
+  apiVoice.disabled = false;
+}
+async function loadAvailableTts() {
+  apiTts.disabled = true;
+  apiTts.replaceChildren(new Option('Cargando TTS instalados…', ''));
+  try {
+    const url = new URL('/api/tts', apiEndpoint.value || location.origin);
+    const response = await fetch(url);
+    const {tts = [], languages = [], language_names: languageNames = {}} = await response.json();
+    if (!response.ok || !tts.length) throw new Error('No hay TTS disponibles');
+    availableTts = tts;
+    apiLanguageNames = languageNames;
+    setAvailableLanguages(languages, apiLanguageNames);
+    renderTtsForLanguage();
+    apiLang.onchange = renderTtsForLanguage;
+    apiTts.onchange = renderVoicesForTts;
+  } catch (error) {
+    apiTts.replaceChildren(new Option('No se pudieron cargar los TTS', ''));
+  }
+}
+apiEndpoint.addEventListener('change', loadAvailableTts);
+loadAvailableTts();
 $('#apiTestForm').onsubmit = async event => {
   event.preventDefault();
   const result = $('#apiResult');
   result.textContent = 'Generando audio…';
   const payload = {
     lang: $('#apiLang').value,
+    tts: apiTts.value || undefined,
+    voice: apiVoice.value || undefined,
     rate: Number($('#apiRate').value || 180),
     fixed_rate: $('#apiFixedRate').checked,
     duration: $('#apiDuration').value || undefined,
@@ -251,7 +314,7 @@ $('#apiTestForm').onsubmit = async event => {
     const generated = await response.json();
     if (!response.ok) throw new Error(generated.error || 'No se pudo generar audio');
     const meta = document.createElement('p');
-    meta.textContent = `Idioma: ${generated.language} · Rate: ${generated.rate} ppm · Duración: ${generated.duration.toFixed(3)} s`;
+    meta.textContent = `TTS: ${generated.tts_used}${generated.voice_used ? ` · Voz: ${generated.voice_used}` : ''} · Idioma: ${generated.language} · Rate: ${generated.rate} ppm · Duración: ${generated.duration.toFixed(3)} s`;
     const audio = document.createElement('audio'); audio.controls = true; audio.src = generated.audio.url;
     const link = document.createElement('a'); link.href = generated.audio.url; link.download = generated.audio.name; link.textContent = 'Descargar audio';
     result.replaceChildren(meta, audio, link);

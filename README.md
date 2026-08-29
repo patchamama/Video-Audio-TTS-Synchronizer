@@ -1253,7 +1253,7 @@ wget https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/m
 ---
 
 **Última actualización:** 2026-08-28
-**Versión:** 2.1.0 (Python rewrite)
+**Versión:** 2.4.0 (Python rewrite)
 
 La versión se incrementa en cada actualización publicada siguiendo [Semantic Versioning](https://semver.org/lang/es/).
 
@@ -1267,3 +1267,23 @@ python3 create_video_tts_from_srt.py --web
 ```
 
 Sin parámetros, el script muestra la URL y abre la interfaz local `http://127.0.0.1:8765`. La UI permite cargar SRT, video opcional, idioma y las opciones de audio disponibles; el backend local ejecuta el mismo CLI.
+
+### API local de generación de audio
+
+Al iniciar la interfaz web, también queda disponible una API HTTP local para integraciones externas. Primero consultá los motores TTS instalados:
+
+```bash
+curl http://127.0.0.1:8765/api/tts
+```
+
+La respuesta incluye IDs seleccionables, idiomas por motor y, para `say` de macOS, las voces instaladas directamente en el sistema (nombre y locale). También devuelve el conjunto global de idiomas disponibles y sus nombres. Por ejemplo, `say`, `edge-tts`, `sapi`, `gtts` o `espeak-ng`, según lo instalado en la máquina.
+
+Luego generá audio con `POST /api/generate-audio`. Acepta `text`, `srt_text`/`srt`, o `srt_file` con `{ "name", "data" }`, donde `data` es Base64. `lang` usa español por defecto; `rate`, `fixed_rate`, `duration` y `pause_ms` son opcionales. Enviá `tts` (o `tts_method`) con un ID devuelto por `/api/tts` para elegir el motor. Para `say`, también podés enviar `voice` (o `tts_voice`) con una voz instalada y compatible con el idioma:
+
+```bash
+curl -X POST http://127.0.0.1:8765/api/generate-audio \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"Hola mundo.","lang":"es","tts":"say","voice":"Eddy (Spanish (Spain))","rate":180,"fixed_rate":true}'
+```
+
+La respuesta devuelve la URL reproducible del WAV, duración, idioma, rate, cues y los campos `tts_requested`, `tts_used`, `voice_requested` y `voice_used`. La sección **«Probar endpoint de generación de audio»** de la interfaz avanzada carga esos TTS automáticamente: al elegir un idioma, muestra únicamente los TTS instalados compatibles y lista sus voces instaladas seleccionables antes de generar.

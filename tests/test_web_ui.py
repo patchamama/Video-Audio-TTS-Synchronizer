@@ -3,12 +3,31 @@ import sys
 from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from create_video_tts_from_srt import APP_VERSION, WEB_ASSET_NAMES, WEB_ASSETS_URLS, fetch_web_asset, ensure_web_assets
+from create_video_tts_from_srt import APP_VERSION, WEB_ASSET_NAMES, WEB_ASSETS_URLS, fetch_web_asset, ensure_web_assets, get_available_tts, get_say_voices
 
 
 def test_app_version_uses_semver():
     import re
     assert re.fullmatch(r'\d+\.\d+\.\d+', APP_VERSION)
+
+
+def test_available_tts_has_unique_machine_readable_ids():
+    engines = get_available_tts()
+    assert len({engine['id'] for engine in engines}) == len(engines)
+    assert all({'id', 'label', 'offline', 'languages'} <= engine.keys() for engine in engines)
+    assert all(engine['languages'] == sorted(set(engine['languages'])) for engine in engines)
+
+
+def test_installed_say_voices_have_language_metadata():
+    assert all({'id', 'name', 'locale', 'language'} <= voice.keys() for voice in get_say_voices())
+
+
+def test_frontend_filters_tts_using_selected_language():
+    script = (Path(__file__).parent.parent / 'web' / 'app.js').read_text(encoding='utf-8')
+    assert "engine.languages.includes(apiLang.value)" in script
+    assert 'apiLang.onchange = renderTtsForLanguage' in script
+    assert 'renderVoicesForTts' in script
+    assert 'voice: apiVoice.value || undefined' in script
 
 
 def test_private_asset_fetch_uses_github_token(monkeypatch=None):

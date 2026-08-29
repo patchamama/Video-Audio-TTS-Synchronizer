@@ -104,6 +104,7 @@ import time
 import uuid
 import base64
 import http.server
+import importlib.util
 import webbrowser
 import threading
 import mimetypes
@@ -116,7 +117,7 @@ from typing import Dict, List, Optional, Tuple
 import shutil
 
 # Incrementar en cada actualización publicada (SemVer).
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.4.0"
 
 
 def configure_console_output():
@@ -304,12 +305,68 @@ def calculate_required_video_padding(video_duration: float, audio_duration: floa
     """Calcula cuánto congelar el último frame para no cortar audio no-truncate."""
     return max(0.0, audio_duration - video_duration)
 
+LANGUAGE_NAMES = {
+    'de': 'Deutsch', 'en': 'English', 'es': 'Español', 'fi': 'Suomi',
+    'fr': 'Français', 'he': 'עברית', 'it': 'Italiano', 'ja': '日本語',
+    'ko': '한국어', 'nl': 'Nederlands', 'pt': 'Português', 'sv': 'Svenska',
+    'zh': '中文',
+}
+
+
+def get_say_voices() -> List[dict]:
+    """Lee directamente las voces instaladas por macOS `say -v ?`."""
+    if not shutil.which('say'):
+        return []
+    try:
+        result = subprocess.run(['say', '-v', '?'], capture_output=True, text=True, check=True)
+    except (OSError, subprocess.CalledProcessError):
+        return []
+    voices = []
+    for line in result.stdout.splitlines():
+        match = re.match(r'^(.+?)\s+([a-z]{2,3}_[A-Z]{2,3})\s+#', line)
+        if match:
+            name, locale = match.groups()
+            voices.append({'id': name, 'name': name, 'locale': locale, 'language': locale.split('_', 1)[0]})
+    return voices
+
+
+def get_available_tts() -> List[dict]:
+    """Devuelve motores, idiomas y voces instalados que la API puede seleccionar."""
+    engines = []
+    say_voices = get_say_voices()
+    if say_voices:
+        languages = sorted({voice['language'] for voice in say_voices})
+        engines.append({'id': 'say', 'label': 'macOS say', 'offline': True,
+                        'languages': languages, 'voices': say_voices})
+    if importlib.util.find_spec('edge_tts'):
+        engines.append({'id': 'edge-tts', 'label': 'Microsoft Edge TTS', 'offline': False,
+                        'languages': sorted({'es', 'en', 'de', 'fr', 'it', 'pt', 'ja', 'zh'})})
+    if importlib.util.find_spec('pyttsx3'):
+        engines.append({'id': 'sapi', 'label': 'SAPI / pyttsx3', 'offline': True,
+                        'languages': sorted({'es', 'en', 'de', 'fr', 'it', 'pt'})})
+    if importlib.util.find_spec('gtts'):
+        engines.append({'id': 'gtts', 'label': 'Google TTS', 'offline': False,
+                        'languages': sorted({'es', 'en', 'de', 'fr', 'it', 'pt', 'ja', 'zh'})})
+    if shutil.which('espeak-ng'):
+        engines.append({'id': 'espeak-ng', 'label': 'eSpeak NG', 'offline': True,
+                        'languages': sorted({'es', 'en', 'de', 'fr', 'it', 'pt', 'ja', 'zh'})})
+    return engines
+
+
 class TTSEngine:
     """Maneja la generación de TTS"""
 
-    def __init__(self, language: str = 'es'):
+    def __init__(self, language: str = 'es', tts_method: Optional[str] = None,
+                 tts_voice: Optional[str] = None):
         self.language = language  # Idioma del TTS (es, en, de, fr, etc.)
-        self.method = self._detect_method()
+        self.requested_tts = tts_method
+        self.requested_voice = tts_voice
+        available_ids = {item['id'] for item in get_available_tts()}
+        if tts_method and tts_method not in available_ids:
+            raise ValueError(f"TTS no instalado o no soportado: {tts_method}")
+        selected_methods = {'say': 'say', 'edge-tts': 'edge-tts', 'sapi': 'sapi',
+                            'gtts': 'linux', 'espeak-ng': 'espeak-ng'}
+        self.method = selected_methods.get(tts_method) if tts_method else self._detect_method()
         self.gtts_consecutive_failures = 0
         self.gtts_permanently_disabled = False
         self.using_fallback = False
@@ -352,19 +409,34 @@ class TTSEngine:
             }
         }
 
-        # Validar idioma y usar español por defecto si no está soportado
-        if self.language not in self.voice_config['espeak']:
+        # macOS expone sus voces instaladas, que pueden abarcar más idiomas que el mapa base.
+        supported_languages = set(self.voice_config['espeak'])
+        if self.method == 'say':
+            supported_languages.update(voice['language'] for voice in get_say_voices())
+        if self.language not in supported_languages:
             print(f"{Colors.YELLOW}⚠️  Idioma '{self.language}' no soportado, usando 'es' por defecto{Colors.NC}")
             self.language = 'es'
 
         # Mostrar configuración de voz según el método
         if self.method == "say":
-            voice = self.voice_config['say'].get(self.language, 'Paulina')
+            installed_voices = get_say_voices()
+            preferred = self.voice_config['say'].get(self.language)
+            selected_voice = next((item for item in installed_voices if item['id'] == self.requested_voice), None)
+            if self.requested_voice and not selected_voice:
+                raise ValueError(f"Voz no instalada: {self.requested_voice}")
+            if selected_voice and selected_voice['language'] != self.language:
+                raise ValueError(f"La voz '{self.requested_voice}' no corresponde al idioma '{self.language}'")
+            voice = selected_voice['name'] if selected_voice else None
+            voice = voice or next((item['name'] for item in installed_voices if item['name'] == preferred), None)
+            voice = voice or next((item['name'] for item in installed_voices if item['language'] == self.language), 'Paulina')
+            self.say_voice = voice
             print(f"{Colors.CYAN}  🎙️  Voz seleccionada: {voice} ({self.language}){Colors.NC}")
-        elif self.method == "windows":
+        elif self.requested_voice:
+            raise ValueError(f"El TTS '{self.requested_tts or self.method}' no expone voces seleccionables")
+        elif self.method in {"windows", "edge-tts"}:
             voice = self.voice_config['edge-tts'].get(self.language, 'es-ES-ElviraNeural')
             print(f"{Colors.CYAN}  🎙️  Voz seleccionada: {voice} ({self.language}){Colors.NC}")
-        elif self.method == "linux":
+        elif self.method in {"linux", "gtts", "espeak-ng", "sapi"}:
             print(f"{Colors.CYAN}  🎙️  Idioma de TTS: {self.language}{Colors.NC}")
 
     def get_tts_name(self) -> str:
@@ -374,6 +446,12 @@ class TTSEngine:
         # Fallback si no se ha usado ningún TTS aún
         if self.method == "say":
             return "say"
+        elif self.method == "edge-tts":
+            return "edge-tts"
+        elif self.method == "sapi":
+            return "sapi"
+        elif self.method == "espeak-ng":
+            return "espeak-ng"
         elif self.method == "windows":
             return "edge-tts"
         elif self.method == "linux":
@@ -545,9 +623,18 @@ class TTSEngine:
     def generate_audio(self, text: str, rate: int, output_file: Path) -> bool:
         """Genera audio TTS con el rate especificado"""
         try:
+            if self.method == "espeak-ng":
+                return self._generate_with_espeak(text, rate, output_file)
+
+            if self.method == "edge-tts":
+                return self._generate_with_edge_tts(text, rate, output_file)
+
+            if self.method == "sapi":
+                return self._generate_with_sapi(text, rate, output_file)
+
             if self.method == "say":
                 # macOS say command con voz configurada según idioma
-                voice = self.voice_config['say'].get(self.language, 'Paulina')
+                voice = getattr(self, 'say_voice', self.voice_config['say'].get(self.language, 'Paulina'))
                 aiff_file = output_file.with_suffix('.aiff')
                 subprocess.run(
                     ["say", "-v", voice, "-r", str(rate), text, "-o", str(aiff_file)],
@@ -1588,7 +1675,9 @@ def generate_api_audio(payload: dict, directory: Path) -> Tuple[Path, dict]:
     fixed_rate = bool(payload.get('fixed_rate'))
     requested_rate = int(payload.get('rate', 180) or 180)
     rates = [requested_rate] if fixed_rate or target_duration is None else list(API_RATE_CANDIDATES)
-    engine = TTSEngine(language=language)
+    requested_tts = payload.get('tts') or payload.get('tts_method')
+    requested_voice = payload.get('voice') or payload.get('tts_voice')
+    engine = TTSEngine(language=language, tts_method=requested_tts, tts_voice=requested_voice)
     candidates = []
     for rate in dict.fromkeys(rates):
         rate_dir = directory / f'rate_{rate}'
@@ -1621,6 +1710,8 @@ def generate_api_audio(payload: dict, directory: Path) -> Tuple[Path, dict]:
         'language': language, 'rate': rate, 'duration': duration,
         'target_duration': target_duration, 'fixed_rate': fixed_rate,
         'pause_ms': pause_ms, 'source_type': source_type, 'cues': cues,
+        'tts_requested': requested_tts, 'tts_used': engine.get_tts_name(),
+        'voice_requested': requested_voice, 'voice_used': getattr(engine, 'say_voice', None),
     }
 
 
@@ -3011,6 +3102,13 @@ def start_web_ui(port: int = 8765):
             query = parse_qs(parsed.query)
             if parsed.path == '/info':
                 return self.send_json({'version': APP_VERSION})
+            if parsed.path == '/api/tts':
+                engines = get_available_tts()
+                return self.send_json({
+                    'tts': engines,
+                    'languages': sorted({language for engine in engines for language in engine['languages']}),
+                    'language_names': LANGUAGE_NAMES,
+                })
             if parsed.path == '/options':
                 return self.send_json([{'name': 'solo_audio', 'label': 'Solo audio'}, {'name': 'no_truncate', 'label': 'No truncar'}, {'name': 'optimize_rate', 'label': 'Optimizar rate tras 50 entradas'}, {'name': 'fix_rate_not_truncate', 'label': 'Audio plano sin truncar ni pausas SRT', 'rate_name': 'fix_rate_not_truncate_rate', 'default': 200, 'pause_name': 'fix_rate_not_truncate_pause', 'pause_default': 1000}, {'name': 'no_freeze', 'label': 'No freeze'}, {'name': 'remove_breaks', 'label': 'Eliminar pausas'}, {'name': 'only_remove_breaks', 'label': 'Solo eliminar pausas'}])
             if parsed.path == '/files':
