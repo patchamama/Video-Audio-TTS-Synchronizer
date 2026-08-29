@@ -119,7 +119,7 @@ import shutil
 import zipfile
 
 # Incrementar en cada actualización publicada (SemVer).
-APP_VERSION = "2.20.0"
+APP_VERSION = "2.26.0"
 
 NOTES_FILE = Path(__file__).resolve().parent / 'notas.txt'
 
@@ -1786,6 +1786,10 @@ def main():
                        help="ID o URL de YouTube para descargar video y subtítulos")
     parser.add_argument("--lang", type=str,
                        help="Idioma de los subtítulos (es, en, de, etc.)")
+    parser.add_argument("--tts", type=str,
+                       help="Motor TTS instalado a utilizar")
+    parser.add_argument("--voice", type=str,
+                       help="Voz instalada del motor TTS elegido")
     parser.add_argument("--fix-rate", type=int, nargs="?", const=180,
                        help="Usar rate de audio fijo (default: 180 si no se especifica valor)")
     parser.add_argument("--optimize-rate", action="store_true",
@@ -1897,7 +1901,7 @@ def main():
     print(f"{Colors.CYAN}🔍 DEBUG: args.lang = {args.lang if hasattr(args, 'lang') else 'NO DEFINIDO'}{Colors.NC}")
     language = args.lang if hasattr(args, 'lang') and args.lang else 'es'
     print(f"{Colors.CYAN}🌍 Idioma configurado: {language}{Colors.NC}")
-    tts_engine = TTSEngine(language=language)
+    tts_engine = TTSEngine(language=language, tts_method=args.tts, tts_voice=args.voice)
 
     # Verificar archivos
     srt_path = Path(args.srt_file)
@@ -2000,7 +2004,9 @@ def main():
         'fix_rate_not_truncate_pause': args.fix_rate_not_truncate_pause,
         'optimize_rate': args.optimize_rate,
         'remove_breaks': args.remove_breaks,
-        'lang': language  # Guardar idioma en checkpoint
+        'lang': language,
+        'tts': args.tts,
+        'voice': args.voice,
     }
 
     # PASO 2: Generar audios con ajuste inteligente
@@ -3197,7 +3203,18 @@ def start_web_ui(port: int = 8765):
                     'language_names': LANGUAGE_NAMES,
                 })
             if parsed.path == '/options':
-                return self.send_json([{'name': 'solo_audio', 'label': 'Solo audio'}, {'name': 'no_truncate', 'label': 'No truncar'}, {'name': 'optimize_rate', 'label': 'Optimizar rate tras 50 entradas'}, {'name': 'fix_rate_not_truncate', 'label': 'Audio plano sin truncar ni pausas SRT', 'rate_name': 'fix_rate_not_truncate_rate', 'default': 200, 'pause_name': 'fix_rate_not_truncate_pause', 'pause_default': 1000}, {'name': 'no_freeze', 'label': 'No freeze'}, {'name': 'remove_breaks', 'label': 'Eliminar pausas'}, {'name': 'only_remove_breaks', 'label': 'Solo eliminar pausas'}])
+                def option(name, spanish, english, **extra):
+                    # "label" se mantiene por compatibilidad con clientes anteriores.
+                    return {'name': name, 'label': spanish, 'label_es': spanish, 'label_en': english, **extra}
+                return self.send_json([
+                    option('solo_audio', 'Solo audio', 'Audio only'),
+                    option('no_truncate', 'No truncar', 'Do not truncate'),
+                    option('optimize_rate', 'Optimizar rate tras 50 entradas', 'Optimize rate after 50 entries'),
+                    option('fix_rate_not_truncate', 'Audio plano sin truncar ni pausas SRT', 'Plain audio without truncation or SRT pauses', rate_name='fix_rate_not_truncate_rate', default=200, pause_name='fix_rate_not_truncate_pause', pause_default=1000),
+                    option('no_freeze', 'No freeze', 'No freeze'),
+                    option('remove_breaks', 'Eliminar pausas', 'Remove pauses'),
+                    option('only_remove_breaks', 'Solo eliminar pausas', 'Only remove pauses'),
+                ])
             if parsed.path == '/files':
                 return self.send_json({
                     'srt': [p.name for p in Path.cwd().iterdir() if p.is_file() and p.suffix.lower() == '.srt'],
@@ -3330,12 +3347,16 @@ def start_web_ui(port: int = 8765):
                     command.extend(['--fix-rate-not-truncate-pause', str(opts.get('fix_rate_not_truncate_pause') or 1000)])
                 if opts.get('lang'):
                     command.extend(['--lang', str(opts['lang'])])
+                if opts.get('tts'):
+                    command.extend(['--tts', str(opts['tts'])])
+                if opts.get('voice'):
+                    command.extend(['--voice', str(opts['voice'])])
                 if opts.get('test'):
                     command.extend(['--test', str(opts.get('test_count') or 30)])
                 job = {'id': uuid.uuid4().hex, 'directory': directory, 'started_at': time.time(), 'output': '▶ Trabajo creado. Iniciando backend...\n', 'done': False, 'files': []}
                 jobs[job['id']] = job
                 threading.Thread(target=run_job, args=(job, command), daemon=True).start()
-                self.send_json({'id': job['id']})
+                self.send_json({'id': job['id'], 'command': command})
             except Exception as error:
                 self.send_json({'error': str(error)}, status=400)
 

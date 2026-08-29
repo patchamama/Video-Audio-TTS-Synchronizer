@@ -66,6 +66,17 @@ def test_frontend_filters_tts_using_selected_language():
     assert 'applyInterfaceLanguage' in script
     assert "'--youtube'" in script
     assert 'tempDirectory' in script
+    assert 'apiVoiceTest' in script
+    assert 'voiceLanguage' in script
+    assert 'voiceTestText' in script
+    assert 'renderMainTts' in script
+    assert 'renderMainVoices' in script
+    assert 'mainVoiceTest' in script
+    assert 'testVoice' in script
+    assert "args.push('--tts'" in script
+    assert "audio.play().catch" in script
+    assert "Testing voice…" in script
+    assert "apiVoice.disabled ? undefined" in script
     assert 'selectAll' in script
     assert "deletable: true" in script
 
@@ -92,6 +103,8 @@ def test_minimal_view_is_served_by_backend_not_web_assets():
     assert "Cache-Control', 'no-store, max-age=0'" in source
     assert "'--youtube'" in source
     assert "'--continue'" in source
+    assert 'parser.add_argument("--tts"' in source
+    assert 'parser.add_argument("--voice"' in source
     assert "sys.executable, '-m', 'yt_dlp'" in source
 
 
@@ -187,3 +200,24 @@ def test_legacy_install_scripts_were_replaced_by_video_tts_starters():
     assert not (root / 'install_script.sh').exists()
     assert (root / 'start_video_tts.sh').exists()
     assert (root / 'start_video_tts.bat').exists()
+
+
+def test_main_processing_form_sends_selected_tts_and_voice():
+    root = Path(__file__).parent.parent
+    page = (root / 'web' / 'index.html').read_text(encoding='utf-8')
+    script = (root / 'web' / 'app.js').read_text(encoding='utf-8')
+    source = (root / 'create_video_tts_from_srt.py').read_text(encoding='utf-8')
+    assert 'id="mainTts" name="tts"' in page
+    assert 'id="mainVoice" name="voice"' in page
+    assert 'renderMainTts' in script and 'renderMainVoices' in script
+    assert "opts.get('tts')" in source and "opts.get('voice')" in source
+    assert "'command': command" in source
+
+
+def test_backend_options_have_english_labels_and_frontend_uses_them():
+    root = Path(__file__).parent.parent
+    source = (root / 'create_video_tts_from_srt.py').read_text(encoding='utf-8')
+    script = (root / 'web' / 'app.js').read_text(encoding='utf-8')
+    assert "'label_en': english" in source
+    assert "option.label_en || option.label" in script
+    assert "tr('results')" in script and "tr('synced')" in script

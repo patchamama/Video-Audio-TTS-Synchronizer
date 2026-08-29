@@ -17,6 +17,7 @@ const backendUrl = path => new URL(path, backendBase.value || location.origin).t
 const backendFileUrl = url => new URL(url, backendBase.value || location.origin).toString();
 const outputFiles = () => $('#results');
 let existingResults = [];
+let backendOptions = [];
 const selectedResultUrls = new Set();
 const notesButton = $('#notesButton');
 const notesCount = $('#notesCount');
@@ -36,9 +37,10 @@ const storageGet = key => { try { return localStorage.getItem(key); } catch (_) 
 const storageSet = (key, value) => { try { localStorage.setItem(key, value); } catch (_) {} };
 
 const interfaceText = {
-  en: {tagline: 'Generate, review and synchronize your audio.', notes: '📝 Notes', process: '✨ Process', subtitles: '📝 Subtitles', language: '🌐 Language', test: '🧪 Test mode · Entries:', reuse: '♻️ Reuse temporary audio', noReuse: 'Do not reuse audio…'},
-  es: {tagline: 'Generá, revisá y sincronizá tu audio.', notes: '📝 Notas', process: '✨ Procesar', subtitles: '📝 Subtítulos', language: '🌐 Idioma', test: '🧪 Modo test · Entradas:', reuse: '♻️ Reutilizar audio temporal', noReuse: 'No reutilizar audio…'}
+  en: {tagline: 'Generate, review and synchronize your audio.', notes: '📝 Notes', process: '✨ Process', subtitles: '📝 Subtitles', language: '🌐 Language', test: '🧪 Test mode · Entries:', reuse: '♻️ Reuse temporary audio', noReuse: 'Do not reuse audio…', minimal: '🪶 Minimal view', connect: 'Connect', results: '✨ Results', resultHelp: 'Select an audio, video or SRT to open it in the synced viewer.', selectAll: '☑️ Select all', deselectAll: '☐ Deselect all', downloadSelected: '⬇️ Download selected', deleteSelected: '🗑️ Delete selected', deleteTempFolders: '🧹 Delete temporary folders', selected: count => `${count} selected`, viewer: 'Viewer:', synced: '📝 Synced subtitles', chooseSrt: '📝 Select an SRT file to view its cues', subtitleViewer: '📝 Subtitles:', folderSrt: 'SRT from this folder…', folderVideo: 'Video from this folder…', open: 'Open', download: 'Download', delete: 'Delete', rate: 'Rate', pause: 'Pause between lines (ms)'},
+  es: {tagline: 'Generá, revisá y sincronizá tu audio.', notes: '📝 Notas', process: '✨ Procesar', subtitles: '📝 Subtítulos', language: '🌐 Idioma', test: '🧪 Modo test · Entradas:', reuse: '♻️ Reutilizar audio temporal', noReuse: 'No reutilizar audio…', minimal: '🪶 Vista mínima', connect: 'Conectar', results: '✨ Resultados', resultHelp: 'Seleccioná un audio, video o SRT para abrirlo en el visor sincronizado.', selectAll: '☑️ Seleccionar todo', deselectAll: '☐ Deseleccionar todo', downloadSelected: '⬇️ Descargar seleccionados', deleteSelected: '🗑️ Borrar seleccionados', deleteTempFolders: '🧹 Eliminar carpetas temporales', selected: count => `${count} seleccionado${count === 1 ? '' : 's'}`, viewer: 'Visor:', synced: '📝 Subtítulos sincronizados', chooseSrt: '📝 Elegí un archivo SRT para ver sus cues', subtitleViewer: '📝 Subtítulos:', folderSrt: 'SRT de esta carpeta…', folderVideo: 'Video de esta carpeta…', open: 'Abrir', download: 'Descargar', delete: 'Borrar', rate: 'Rate', pause: 'Pausa entre líneas (ms)'}
 };
+const tr = key => (interfaceText[uiLanguage?.value || 'en'] || interfaceText.en)[key] || key;
 function applyInterfaceLanguage(language = 'en') {
   const text = interfaceText[language] || interfaceText.en;
   document.documentElement.lang = language;
@@ -53,6 +55,10 @@ function applyInterfaceLanguage(language = 'en') {
   if (testLabel?.childNodes[2]) testLabel.childNodes[2].textContent = ` ${text.test} `;
   if (tempDirectory?.parentElement?.firstChild) tempDirectory.parentElement.firstChild.textContent = text.reuse + ' ';
   if (tempDirectory?.options?.[0]) tempDirectory.options[0].textContent = text.noReuse;
+  if (!isMinimalMode) setText('#minimalMode', text.minimal);
+  setText('#reloadBackend', text.connect);
+  if (backendOptions.length) renderOptions(backendOptions);
+  if (existingResults.length) void renderResults(existingResults);
   storageSet('videoTtsLanguage', language);
 }
 function applyTheme(theme) {
@@ -156,7 +162,7 @@ function createSubtitleViewer(subtitle, cues) {
   const wrapper = document.createElement('section');
   wrapper.className = 'viewer subtitle-viewer';
   const title = document.createElement('h2');
-  title.textContent = `📝 Subtítulos: ${subtitle.name}`;
+  title.textContent = `${tr('subtitleViewer')} ${subtitle.name}`;
   const {cueList} = createCueList(cues, () => {});
   wrapper.append(title, cueList);
   return wrapper;
@@ -178,13 +184,13 @@ function createSyncedPlayer(media, cues) {
   const wrapper = document.createElement('section');
   wrapper.className = 'viewer';
   const title = document.createElement('h2');
-  title.textContent = `${iconFor(media)} Visor: ${media.name}`;
+  title.textContent = `${iconFor(media)} ${tr('viewer')} ${media.name}`;
   const player = document.createElement(fileKind(media) === 'video' ? 'video' : 'audio');
   player.controls = true;
   player.preload = 'metadata';
   player.src = media.url;
   const subtitleTitle = document.createElement('h3');
-  subtitleTitle.textContent = cues.length ? '📝 Subtítulos sincronizados' : '📝 Elegí un archivo SRT para ver sus cues';
+  subtitleTitle.textContent = cues.length ? tr('synced') : tr('chooseSrt');
   const {cueList, rows} = createCueList(cues, cue => seekPlayerToCue(player, cue));
   let activeCue;
   player.ontimeupdate = () => {
@@ -220,28 +226,28 @@ async function renderResults(files) {
   const section = document.createElement('section');
   section.className = 'results-panel';
   const title = document.createElement('h2');
-  title.textContent = '✨ Resultados';
+  title.textContent = tr('results');
   const help = document.createElement('p');
   help.className = 'result-help';
-  help.textContent = 'Seleccioná un audio, video o SRT para abrirlo en el visor sincronizado.';
+  help.textContent = tr('resultHelp');
   const bulkActions = document.createElement('div');
   bulkActions.className = 'bulk-actions';
   const selectionCount = document.createElement('span');
   const selectAll = document.createElement('button');
-  selectAll.type = 'button'; selectAll.textContent = '☑️ Seleccionar todo';
+  selectAll.type = 'button'; selectAll.textContent = tr('selectAll');
   const downloadSelected = document.createElement('button');
-  downloadSelected.type = 'button'; downloadSelected.textContent = '⬇️ Descargar seleccionados';
+  downloadSelected.type = 'button'; downloadSelected.textContent = tr('downloadSelected');
   const deleteSelected = document.createElement('button');
-  deleteSelected.type = 'button'; deleteSelected.textContent = '🗑️ Borrar seleccionados'; deleteSelected.className = 'delete-action';
+  deleteSelected.type = 'button'; deleteSelected.textContent = tr('deleteSelected'); deleteSelected.className = 'delete-action';
   const deleteTempFolders = document.createElement('button');
-  deleteTempFolders.type = 'button'; deleteTempFolders.textContent = '🧹 Eliminar carpetas temporales'; deleteTempFolders.className = 'delete-action';
+  deleteTempFolders.type = 'button'; deleteTempFolders.textContent = tr('deleteTempFolders'); deleteTempFolders.className = 'delete-action';
   const selectedFiles = () => files.filter(file => file.deletable && selectedResultUrls.has(file.url));
   const updateBulkActions = () => {
     const count = selectedFiles().length;
-    selectionCount.textContent = `${count} seleccionado${count === 1 ? '' : 's'}`;
+    selectionCount.textContent = tr('selected')(count);
     downloadSelected.disabled = !count; deleteSelected.disabled = !count;
     const selectable = files.filter(file => file.deletable);
-    selectAll.textContent = selectable.length && count === selectable.length ? '☐ Deseleccionar todo' : '☑️ Seleccionar todo';
+    selectAll.textContent = selectable.length && count === selectable.length ? tr('deselectAll') : tr('selectAll');
     selectAll.disabled = !selectable.length;
   };
   selectAll.onclick = () => {
@@ -293,7 +299,7 @@ async function renderResults(files) {
     item.className = `result-file ${fileKind(file)}`;
     if (file.deletable) {
       const checkbox = document.createElement('input');
-      checkbox.type = 'checkbox'; checkbox.checked = selectedResultUrls.has(file.url); checkbox.setAttribute('aria-label', `Seleccionar ${file.name}`);
+      checkbox.type = 'checkbox'; checkbox.checked = selectedResultUrls.has(file.url); checkbox.setAttribute('aria-label', `${tr('selectAll')}: ${file.name}`);
       checkbox.onchange = () => { if (checkbox.checked) selectedResultUrls.add(file.url); else selectedResultUrls.delete(file.url); updateBulkActions(); };
       item.append(checkbox);
     }
@@ -303,13 +309,13 @@ async function renderResults(files) {
       await updateViewer(); viewer.scrollIntoView({behavior: 'smooth', block: 'start'});
     });
     const open = document.createElement('a');
-    open.href = file.url; open.target = '_blank'; open.rel = 'noopener'; open.textContent = '↗️'; open.title = 'Abrir'; open.setAttribute('aria-label', 'Abrir'); open.className = 'result-action';
+    open.href = file.url; open.target = '_blank'; open.rel = 'noopener'; open.textContent = '↗️'; open.title = tr('open'); open.setAttribute('aria-label', tr('open')); open.className = 'result-action';
     const download = document.createElement('a');
-    download.href = file.url; download.download = file.name; download.textContent = '⬇️'; download.title = 'Descargar'; download.setAttribute('aria-label', 'Descargar'); download.className = 'result-action';
+    download.href = file.url; download.download = file.name; download.textContent = '⬇️'; download.title = tr('download'); download.setAttribute('aria-label', tr('download')); download.className = 'result-action';
     item.append(name, open, download);
     if (file.deletable) {
       const remove = document.createElement('button');
-      remove.type = 'button'; remove.textContent = '🗑️'; remove.title = 'Borrar'; remove.setAttribute('aria-label', `Borrar ${file.name}`); remove.className = 'result-action delete-action';
+      remove.type = 'button'; remove.textContent = '🗑️'; remove.title = tr('delete'); remove.setAttribute('aria-label', `${tr('delete')} ${file.name}`); remove.className = 'result-action delete-action';
       remove.onclick = async () => {
         if (!confirm(`¿Borrar ${file.name}?`)) return;
         const response = await fetch(backendUrl('/delete'), {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: file.name})});
@@ -385,6 +391,8 @@ function updateCliCommand() {
   else if (continueFrom) args.push('--continue', continueFrom);
   else { args.push(srt); if (video && !fixedRate) args.push(video); }
   args.push('--lang', form.get('lang') || 'es');
+  if (form.get('tts')) args.push('--tts', form.get('tts'));
+  if (form.get('voice')) args.push('--voice', form.get('voice'));
   if (form.get('test') === 'on') args.push('--test', form.get('test_count') || '30');
   if (fixedRate) {
     args.push('--fix-rate-not-truncate', form.get('fix_rate_not_truncate_rate') || '200');
@@ -398,18 +406,19 @@ function renderOptions(options) { $('#options').replaceChildren(...options.map(o
   const label = document.createElement('label');
   const input = document.createElement('input');
   input.name = option.name; input.type = 'checkbox';
-  label.append(input, ` ⚙️ ${option.label}`);
+  const labelText = uiLanguage?.value === 'es' ? option.label_es || option.label : option.label_en || option.label;
+  label.append(input, ` ⚙️ ${labelText}`);
   if (option.rate_name) {
     const rate = document.createElement('input');
     rate.name = option.rate_name; rate.type = 'number'; rate.min = '80'; rate.max = '400'; rate.step = '1'; rate.value = option.default || 200;
-    rate.setAttribute('aria-label', 'Rate de voz en palabras por minuto');
-    label.append(' · Rate: ', rate, ' ppm');
+    rate.setAttribute('aria-label', `${tr('rate')} (ppm)`);
+    label.append(` · ${tr('rate')}: `, rate, ' ppm');
   }
   if (option.pause_name) {
     const pause = document.createElement('input');
     pause.name = option.pause_name; pause.type = 'number'; pause.min = '0'; pause.step = '100'; pause.value = option.pause_default || 1000;
-    pause.setAttribute('aria-label', 'Pausa entre líneas en milisegundos');
-    label.append(' · Pausa entre líneas (ms): ', pause);
+    pause.setAttribute('aria-label', tr('pause'));
+    label.append(` · ${tr('pause')}: `, pause);
   }
   return label;
 })); updateCliCommand(); }
@@ -439,6 +448,13 @@ apiEndpoint.value = backendUrl('/api/generate-audio');
 const apiTts = $('#apiTts');
 const apiLang = $('#apiLang');
 const apiVoice = $('#apiVoice');
+const mainTts = $('#mainTts');
+const mainVoice = $('#mainVoice');
+const mainLang = $('#f select[name="lang"]');
+const apiVoiceTest = $('#apiVoiceTest');
+const mainVoiceTest = $('#mainVoiceTest');
+const voiceTestText = 'This is a short voice sample for Video TTS.';
+const voiceLanguage = voice => String(voice.language || voice.locale || '').toLowerCase().split(/[-_]/)[0];
 const languageName = (code, names = {}) => names[code] || code.toUpperCase();
 let availableTts = [];
 let apiLanguageNames = {};
@@ -468,15 +484,62 @@ function renderTtsForLanguage() {
 }
 function renderVoicesForTts() {
   const engine = availableTts.find(item => item.id === apiTts.value);
-  const voices = engine?.voices?.filter(voice => voice.language === apiLang.value) || [];
+  const voices = engine?.voices?.filter(voice => voiceLanguage(voice) === apiLang.value) || [];
   if (!voices.length) {
     apiVoice.replaceChildren(new Option('El TTS usa su voz predeterminada', ''));
     apiVoice.disabled = true;
+    apiVoiceTest.disabled = !engine;
     return;
   }
   apiVoice.replaceChildren(...voices.map(voice => new Option(`${voice.name} (${voice.locale})`, voice.id)));
   apiVoice.disabled = false;
+  apiVoiceTest.disabled = false;
 }
+function renderMainTts() {
+  if (!mainTts || !mainVoice) return;
+  const previous = mainTts.value;
+  const compatible = availableTts.filter(engine => engine.languages.includes(mainLang.value));
+  if (!compatible.length) {
+    mainTts.replaceChildren(new Option('No installed TTS for this language', ''));
+    mainTts.disabled = true;
+    renderMainVoices();
+    return;
+  }
+  mainTts.replaceChildren(...compatible.map(engine => new Option(engine.label, engine.id)));
+  mainTts.value = compatible.some(engine => engine.id === previous) ? previous : compatible[0].id;
+  mainTts.disabled = false;
+  renderMainVoices();
+}
+function renderMainVoices() {
+  if (!mainVoice) return;
+  const engine = availableTts.find(item => item.id === mainTts.value);
+  const voices = engine?.voices?.filter(voice => voiceLanguage(voice) === mainLang.value) || [];
+  if (!voices.length) {
+    mainVoice.replaceChildren(new Option('Default TTS voice', ''));
+    mainVoice.disabled = true;
+    mainVoiceTest.disabled = !engine;
+    updateCliCommand();
+    return;
+  }
+  mainVoice.replaceChildren(...voices.map(voice => new Option(`${voice.name} (${voice.locale})`, voice.id)));
+  mainVoice.disabled = false;
+  mainVoiceTest.disabled = false;
+  updateCliCommand();
+}
+async function testVoice({tts, voice, lang}, button) {
+  const original = button.textContent;
+  button.disabled = true; button.textContent = '⏳ Testing voice…';
+  try {
+    const response = await fetch(apiEndpoint.value, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: voiceTestText, lang, tts: tts || undefined, voice: voice || undefined, rate: 180, fixed_rate: true, pause_ms: 0})});
+    const generated = await response.json();
+    if (!response.ok) throw new Error(generated.error || 'Could not generate voice test');
+    const audio = new Audio(new URL(generated.audio.url, apiEndpoint.value).toString());
+    audio.play().catch(() => {});
+  } catch (error) { logs.textContent = `Error: ${error.message}`; }
+  finally { button.disabled = false; button.textContent = original; }
+}
+apiVoiceTest.onclick = () => testVoice({tts: apiTts.value, voice: apiVoice.disabled ? undefined : apiVoice.value, lang: apiLang.value}, apiVoiceTest);
+mainVoiceTest.onclick = () => testVoice({tts: mainTts.value, voice: mainVoice.disabled ? undefined : mainVoice.value, lang: mainLang.value}, mainVoiceTest);
 async function loadAvailableTts() {
   apiTts.disabled = true;
   apiTts.replaceChildren(new Option('Cargando TTS instalados…', ''));
@@ -489,8 +552,12 @@ async function loadAvailableTts() {
     apiLanguageNames = languageNames;
     setAvailableLanguages(languages, apiLanguageNames);
     renderTtsForLanguage();
+    renderMainTts();
     apiLang.onchange = renderTtsForLanguage;
     apiTts.onchange = renderVoicesForTts;
+    mainLang.onchange = () => { renderMainTts(); updateCliCommand(); };
+    mainTts.onchange = () => { renderMainVoices(); updateCliCommand(); };
+    mainVoice.onchange = updateCliCommand;
   } catch (error) {
     apiTts.replaceChildren(new Option('No se pudieron cargar los TTS', ''));
   }
@@ -506,13 +573,13 @@ async function refreshBackend() {
     const files = await fetch(backendUrl('/files')).then(response => response.json());
     delete srtFile.dataset.local;
     delete videoFile.dataset.local;
-    localSrt.replaceChildren(new Option('SRT de esta carpeta…', '')); populate(localSrt, files.srt || []);
-    localVideo.replaceChildren(new Option('Video de esta carpeta…', '')); populate(localVideo, files.video || []);
+    localSrt.replaceChildren(new Option(tr('folderSrt'), '')); populate(localSrt, files.srt || []);
+    localVideo.replaceChildren(new Option(tr('folderVideo'), '')); populate(localVideo, files.video || []);
     if (tempDirectory) tempDirectory.replaceChildren(new Option(interfaceText[uiLanguage?.value || 'en'].noReuse, ''), ...(files.temp_dirs || []).map(name => new Option(name, name)));
     existingResults = (files.results || []).map(file => ({...file, url: backendFileUrl(file.url)}));
     await renderResults(existingResults);
-    const options = await fetch(backendUrl('/options')).then(response => response.json());
-    renderOptions(options);
+    backendOptions = await fetch(backendUrl('/options')).then(response => response.json());
+    renderOptions(backendOptions);
     if (!previousApiEndpoint || previousApiEndpoint === oldDefault) apiEndpoint.value = backendUrl('/api/generate-audio');
     activeBackendBase = backendBase.value;
     await loadAvailableTts();

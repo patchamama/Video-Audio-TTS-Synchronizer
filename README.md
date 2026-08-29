@@ -12,6 +12,10 @@ Sin `git clone`: descargá el lanzador, ejecutalo y este descarga/actualiza el a
 
 Ejemplo CLI: `./start_video_tts.sh --youtube ULKkrkIJ0h8 --lang de` (Windows: `start_video_tts.bat --youtube ULKkrkIJ0h8 --lang de`). `yt-dlp` se instala desde `requirements.txt` en el entorno `.venv` en todas las plataformas, incluida macOS; el programa lo ejecuta con el mismo Python para evitar usar una copia distinta del PATH.
 
+En **Test audio generation endpoint**, las voces instaladas se filtran por el TTS y el idioma elegidos; **Test selected voice** genera una muestra breve reproducible y con reproducción automática; si el TTS no ofrece voces instaladas, prueba su voz predeterminada.
+
+El formulario principal también permite elegir **TTS** y **Installed voice**; ambos se envían como `--tts` y `--voice` para generar el audio desde los subtítulos con el motor elegido. La respuesta de `/run` también incluye el comando generado para auditar los parámetros enviados. La interfaz EN/ES traduce también los parámetros enviados por `/options` y los paneles dinámicos de resultados y visor. Al seleccionar una voz instalada aparece **Test** a su derecha para escuchar una muestra breve.
+
 ## 📋 Tabla de Contenidos
 
 - [Descripción](#-descripción)
@@ -1263,7 +1267,7 @@ wget https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/m
 ---
 
 **Última actualización:** 2026-08-28
-**Versión:** 2.20.0 (Python rewrite)
+**Versión:** 2.26.0 (Python rewrite)
 
 La versión se incrementa en cada actualización publicada siguiendo [Semantic Versioning](https://semver.org/lang/es/).
 
