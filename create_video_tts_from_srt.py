@@ -119,7 +119,7 @@ import shutil
 import zipfile
 
 # Incrementar en cada actualización publicada (SemVer).
-APP_VERSION = "2.15.0"
+APP_VERSION = "2.16.0"
 
 NOTES_FILE = Path(__file__).resolve().parent / 'notas.txt'
 

@@ -4,7 +4,13 @@ Sistema inteligente de sincronización de audio TTS (Text-to-Speech) con video a
 
 ## ⚡ Instalación rápida desde CLI
 
-**macOS / Linux:** `curl -LO https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/main/create_video_tts_from_srt.py && python3 create_video_tts_from_srt.py --install-dependencies` · **Windows (PowerShell):** `iwr https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/main/create_video_tts_from_srt.py -OutFile create_video_tts_from_srt.py; py create_video_tts_from_srt.py --install-dependencies`
+Sin `git clone`: descargá el único archivo Python, instalá sus dependencias y abrí la interfaz web en el mismo comando.
+
+**macOS / Linux:** `curl -fsSLO https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/main/create_video_tts_from_srt.py && python3 create_video_tts_from_srt.py --install-dependencies && python3 create_video_tts_from_srt.py --web`
+
+**Windows (PowerShell):** `iwr https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/main/create_video_tts_from_srt.py -OutFile create_video_tts_from_srt.py; py create_video_tts_from_srt.py --install-dependencies; py create_video_tts_from_srt.py --web`
+
+El archivo queda en la carpeta actual y luego podés iniciarlo rápidamente con `python3 create_video_tts_from_srt.py --web` (o `py create_video_tts_from_srt.py --web` en Windows).
 
 ## 📋 Tabla de Contenidos
 
@@ -1257,7 +1263,7 @@ wget https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/m
 ---
 
 **Última actualización:** 2026-08-28
-**Versión:** 2.15.0 (Python rewrite)
+**Versión:** 2.16.0 (Python rewrite)
 
 La versión se incrementa en cada actualización publicada siguiendo [Semantic Versioning](https://semver.org/lang/es/).
 
