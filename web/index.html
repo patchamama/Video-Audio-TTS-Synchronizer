@@ -4,11 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Video TTS</title>
+  <link id="favicon" rel="icon" type="image/svg+xml" href="/web/favicon.svg">
   <link rel="stylesheet" href="/web/styles.css">
 </head>
 <body>
   <main>
-    <header class="app-header"><span class="app-icon">🎙️</span><div><h1>Video TTS <span id="appVersion" class="version-badge" aria-label="Versión del programa"></span></h1><p>Generá, revisá y sincronizá tu audio.</p></div><a id="minimalMode" class="mode-link" href="/minimal">🪶 Vista mínima</a></header>
+    <header class="app-header"><img class="app-icon" src="/web/favicon.svg" alt="Video TTS"><div><h1>Video TTS <span id="appVersion" class="version-badge" aria-label="Versión del programa"></span></h1><p>Generá, revisá y sincronizá tu audio.</p></div><button id="notesButton" class="mode-link" type="button">📝 Notas <sup id="notesCount">0</sup></button><a id="minimalMode" class="mode-link" href="/minimal">🪶 Vista mínima</a></header>
+    <dialog id="notesDialog" class="notes-dialog"><section><header><h2>📝 Notas</h2><button id="closeNotes" type="button" aria-label="Cerrar notas">×</button></header><textarea id="notesEditor" rows="14" placeholder="Escribí tus notas…"></textarea><small id="notesStatus"></small><footer><button id="addTaskNote" type="button">+ - [ ]</button><button id="saveNotes" type="button">Guardar y sincronizar</button></footer></section></dialog>
     <label class="backend-selector">🔌 Backend API <input id="backendBase" type="url" aria-label="URL base del backend API"><button id="reloadBackend" type="button">Conectar</button></label>
     <form id="f">
       <div id="drop">📥 Arrastrá un <strong>SRT</strong> o <strong>video</strong> acá, o seleccioná archivos</div>

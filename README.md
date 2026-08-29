@@ -1257,7 +1257,7 @@ wget https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/m
 ---
 
 **Última actualización:** 2026-08-28
-**Versión:** 2.9.0 (Python rewrite)
+**Versión:** 2.11.0 (Python rewrite)
 
 La versión se incrementa en cada actualización publicada siguiendo [Semantic Versioning](https://semver.org/lang/es/).
 
@@ -1277,6 +1277,10 @@ La interfaz avanzada permite cambiar **Backend API**. Por defecto usa el backend
 Debajo de la prueba de endpoint, la sección contraída **«Ver comando CLI equivalente»** construye y permite copiar la línea de terminal según los archivos y opciones seleccionadas en la interfaz.
 
 La vista avanzada muestra al abrirse los videos, audios y subtítulos ya existentes como resultados interactivos; los controles son iconos para abrir, descargar y borrar los archivos locales. También permite seleccionar varios archivos para descargarlos en un ZIP o borrarlos en lote.
+
+En ese panel, **Eliminar carpetas temporales** borra únicamente directorios locales llamados `temp_*` (nunca archivos ni enlaces simbólicos). El icono de Video TTS muestra el progreso en la pestaña del navegador durante el procesamiento; desde CLI, el título de la terminal muestra el mismo porcentaje.
+
+El botón **Notas** abre un editor de `notas.txt`, muestra el número de notas y permite insertar tareas `- [ ]`. Al guardar, el backend versiona ese archivo y trata de sincronizarlo con el remoto GitHub configurado; si falla la red o Git, conserva las notas localmente e informa el estado.
 
 ### API local de generación de audio
 

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Video TTS">
+  <rect x="3" y="8" width="42" height="48" rx="9" fill="#256a58"/>
+  <path d="M27 24 27 40 40 32Z" fill="#fff"/>
+  <path d="M47 24 61 16 61 48 47 40Z" fill="#8bb09e"/>
+</svg>

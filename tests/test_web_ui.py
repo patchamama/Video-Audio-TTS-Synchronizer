@@ -3,12 +3,29 @@ import sys
 from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from create_video_tts_from_srt import APP_VERSION, WEB_ASSET_NAMES, WEB_ASSETS_URLS, fetch_web_asset, ensure_web_assets, get_available_tts, get_say_voices
+from create_video_tts_from_srt import APP_VERSION, WEB_ASSET_NAMES, WEB_ASSETS_URLS, count_notes, fetch_web_asset, ensure_web_assets, get_available_tts, get_say_voices, remove_temp_directories
 
 
 def test_app_version_uses_semver():
     import re
     assert re.fullmatch(r'\d+\.\d+\.\d+', APP_VERSION)
+
+
+def test_count_notes_ignores_blank_lines():
+    assert count_notes('Primera nota\n\n- [ ] Tarea\n') == 2
+
+
+def test_remove_temp_directories_only_removes_directories_with_temp_prefix():
+    with TemporaryDirectory() as directory:
+        root = Path(directory)
+        (root / 'temp_first').mkdir()
+        (root / 'temp_second').mkdir()
+        (root / 'temp_file').write_text('preservar', encoding='utf-8')
+        (root / 'resultado.wav').write_text('preservar', encoding='utf-8')
+
+        assert remove_temp_directories(root) == ['temp_first', 'temp_second']
+        assert (root / 'temp_file').is_file()
+        assert (root / 'resultado.wav').is_file()
 
 
 def test_available_tts_has_unique_machine_readable_ids():
@@ -39,6 +56,11 @@ def test_frontend_filters_tts_using_selected_language():
     assert 'existingResults' in script
     assert "backendUrl(`/download?${query}`)" in script
     assert 'selectedResultUrls' in script
+    assert "backendUrl('/notes')" in script
+    assert 'setNotesCount' in script
+    assert "backendUrl('/delete-temp-folders')" in script
+    assert 'setFaviconProgress' in script
+    assert 'favicon.href' in script
 
 
 def test_minimal_view_is_served_by_backend_not_web_assets():
@@ -51,8 +73,13 @@ def test_minimal_view_is_served_by_backend_not_web_assets():
     assert "fetch('/files')" in source
     assert "fetch('/options')" in source
     assert "'/existing?name=" in source
-    assert "path not in {'/run', '/api/generate-audio', '/delete'}" in source
+    assert "'/delete-temp-folders'" in source
     assert "if parsed.path == '/download':" in source
+    assert "if parsed.path == '/notes':" in source
+    assert 'sync_notes_to_github' in source
+    assert 'def remove_temp_directories' in source
+    assert 'def set_terminal_progress' in source
+    assert 'Video TTS · {percent}%' in source
 
 
 def test_private_asset_fetch_uses_github_token(monkeypatch=None):

@@ -2,6 +2,7 @@ const $ = selector => document.querySelector(selector);
 const logs = $('#o');
 const progress = $('#progress');
 const progressLabel = $('#progressLabel');
+const favicon = $('#favicon');
 const srtFile = $('#srtFile');
 const videoFile = $('#videoFile');
 const localSrt = $('#localSrt');
@@ -14,6 +15,11 @@ const backendFileUrl = url => new URL(url, backendBase.value || location.origin)
 const outputFiles = () => $('#results');
 let existingResults = [];
 const selectedResultUrls = new Set();
+const notesButton = $('#notesButton');
+const notesCount = $('#notesCount');
+const notesDialog = $('#notesDialog');
+const notesEditor = $('#notesEditor');
+const notesStatus = $('#notesStatus');
 const audioExtensions = new Set(['wav', 'aac', 'mp3', 'ogg', 'm4a']);
 const videoExtensions = new Set(['mp4', 'mkv', 'mov', 'avi', 'webm']);
 const isMinimalMode = new URLSearchParams(location.search).get('mode') === 'minimal';
@@ -23,6 +29,40 @@ if (isMinimalMode) {
   minimalLink.href = '/'; minimalLink.textContent = '↗ Vista avanzada';
 }
 const subtitleProgress = output => [...output.matchAll(/Subtítulo\s+(\d+)\/(\d+)/gi)].pop();
+
+function setFaviconProgress(percent) {
+  const value = Number.isFinite(percent) ? Math.max(0, Math.min(100, Math.round(percent))) : null;
+  if (value === null) { favicon.href = '/web/favicon.svg'; return; }
+  const label = `${value}%`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect x="3" y="8" width="58" height="48" rx="9" fill="#256a58"/><text x="32" y="39" text-anchor="middle" fill="white" font-family="Arial,sans-serif" font-size="20" font-weight="700">${label}</text></svg>`;
+  favicon.href = `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
+function setNotesCount(count) { notesCount.textContent = String(count || 0); }
+async function loadNotes() {
+  notesStatus.textContent = 'Cargando notas…';
+  try {
+    const response = await fetch(backendUrl('/notes'));
+    const notes = await response.json();
+    if (!response.ok) throw new Error(notes.error || 'No se pudieron cargar las notas');
+    notesEditor.value = notes.content || ''; setNotesCount(notes.count); notesStatus.textContent = notes.tracked ? 'Archivo notas.txt con seguimiento local.' : 'Todavía no hay notas guardadas.';
+  } catch (error) { notesStatus.textContent = `Error: ${error.message}`; }
+}
+notesButton.onclick = async () => { notesDialog.showModal(); await loadNotes(); };
+$('#closeNotes').onclick = () => notesDialog.close();
+$('#addTaskNote').onclick = () => {
+  const prefix = notesEditor.value && !notesEditor.value.endsWith('\n') ? '\n' : '';
+  notesEditor.setRangeText(`${prefix}- [ ] `, notesEditor.selectionStart, notesEditor.selectionEnd, 'end'); notesEditor.focus();
+};
+$('#saveNotes').onclick = async () => {
+  notesStatus.textContent = 'Guardando…';
+  try {
+    const response = await fetch(backendUrl('/notes'), {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({content: notesEditor.value})});
+    const notes = await response.json();
+    if (!response.ok) throw new Error(notes.error || 'No se pudieron guardar las notas');
+    setNotesCount(notes.count); notesStatus.textContent = notes.github?.message || 'Notas guardadas.';
+  } catch (error) { notesStatus.textContent = `Error: ${error.message}`; }
+};
 
 const readFile = async file => file?.name
   ? {name: file.name, data: btoa(String.fromCharCode(...new Uint8Array(await file.arrayBuffer())))}
@@ -156,6 +196,8 @@ async function renderResults(files) {
   downloadSelected.type = 'button'; downloadSelected.textContent = '⬇️ Descargar seleccionados';
   const deleteSelected = document.createElement('button');
   deleteSelected.type = 'button'; deleteSelected.textContent = '🗑️ Borrar seleccionados'; deleteSelected.className = 'delete-action';
+  const deleteTempFolders = document.createElement('button');
+  deleteTempFolders.type = 'button'; deleteTempFolders.textContent = '🧹 Eliminar carpetas temporales'; deleteTempFolders.className = 'delete-action';
   const selectedFiles = () => files.filter(file => file.deletable && selectedResultUrls.has(file.url));
   const updateBulkActions = () => {
     const count = selectedFiles().length;
@@ -177,7 +219,16 @@ async function renderResults(files) {
     existingResults = existingResults.filter(file => !selected.some(candidate => candidate.name === file.name));
     renderResults(files.filter(file => !selected.some(candidate => candidate.name === file.name)));
   };
-  bulkActions.append(selectionCount, downloadSelected, deleteSelected);
+  deleteTempFolders.onclick = async () => {
+    if (!confirm('¿Eliminar todas las carpetas temp_* de este backend? Esta acción no se puede deshacer.')) return;
+    try {
+      const response = await fetch(backendUrl('/delete-temp-folders'), {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'No se pudieron eliminar las carpetas temporales');
+      logs.textContent = result.count ? `🧹 Se eliminaron ${result.count} carpeta(s) temporal(es).` : '🧹 No había carpetas temporales para eliminar.';
+    } catch (error) { logs.textContent = `Error: ${error.message}`; }
+  };
+  bulkActions.append(selectionCount, downloadSelected, deleteSelected, deleteTempFolders);
   const list = document.createElement('ul');
   const viewer = document.createElement('div');
   viewer.id = 'viewer';
@@ -241,10 +292,13 @@ async function poll(id) {
   if (match) {
     const [, current, total] = match;
     progress.max = Number(total); progress.value = Number(current);
-    progressLabel.textContent = `⏳ Subtítulo ${current}/${total}`;
+    const percent = Number(current) / Number(total) * 100;
+    progressLabel.textContent = `⏳ Subtítulo ${current}/${total} · ${Math.round(percent)}%`;
+    setFaviconProgress(percent);
   }
   if (!status.done) return setTimeout(() => poll(id), 700);
   progressLabel.textContent = match ? progressLabel.textContent : '✅ Procesamiento finalizado';
+  setFaviconProgress(null);
   const jobResults = (status.files || []).map(file => ({...file, url: backendFileUrl(file.url)}));
   renderResults([...existingResults, ...jobResults]);
 }
@@ -255,6 +309,7 @@ $('#f').onsubmit = async event => {
   const srt = await selectedOrUploaded(srtFile);
   if (!srt) { logs.textContent = 'Seleccioná un archivo SRT.'; return; }
   progress.max = 1; progress.value = 0; progressLabel.textContent = '⏳ Preparando procesamiento…';
+  setFaviconProgress(0);
   const options = Object.fromEntries(new FormData(event.currentTarget));
   ['solo_audio', 'no_truncate', 'optimize_rate', 'fix_rate_not_truncate', 'no_freeze', 'remove_breaks', 'only_remove_breaks', 'test'].forEach(key => { options[key] = options[key] === 'on'; });
   options.fix_rate_not_truncate_rate = Number(options.fix_rate_not_truncate_rate || 200);
@@ -264,7 +319,7 @@ $('#f').onsubmit = async event => {
   if (options.fix_rate_not_truncate && selectedVideo) { logs.textContent = 'El modo audio plano solo se puede usar sin video.'; return; }
   const response = await fetch(backendUrl('/run'), {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({srt, video: selectedVideo, opts: options})});
   const job = await response.json();
-  if (!job.id) { logs.textContent = 'Error: ' + (job.error || 'No se pudo crear el trabajo'); return; }
+  if (!job.id) { logs.textContent = 'Error: ' + (job.error || 'No se pudo crear el trabajo'); setFaviconProgress(null); return; }
   poll(job.id);
 };
 
