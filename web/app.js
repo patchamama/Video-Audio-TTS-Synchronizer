@@ -8,6 +8,9 @@ const videoFile = $('#videoFile');
 const localSrt = $('#localSrt');
 const localVideo = $('#localVideo');
 const backendBase = $('#backendBase');
+const tempDirectory = $('#tempDirectory');
+const uiLanguage = $('#uiLanguage');
+const themeToggle = $('#themeToggle');
 backendBase.value = location.origin;
 let activeBackendBase = backendBase.value;
 const backendUrl = path => new URL(path, backendBase.value || location.origin).toString();
@@ -29,13 +32,45 @@ if (isMinimalMode) {
   minimalLink.href = '/'; minimalLink.textContent = '↗ Vista avanzada';
 }
 const subtitleProgress = output => [...output.matchAll(/Subtítulo\s+(\d+)\/(\d+)/gi)].pop();
+const storageGet = key => { try { return localStorage.getItem(key); } catch (_) { return null; } };
+const storageSet = (key, value) => { try { localStorage.setItem(key, value); } catch (_) {} };
+
+const interfaceText = {
+  en: {tagline: 'Generate, review and synchronize your audio.', notes: '📝 Notes', process: '✨ Process', subtitles: '📝 Subtitles', language: '🌐 Language', test: '🧪 Test mode · Entries:', reuse: '♻️ Reuse temporary audio', noReuse: 'Do not reuse audio…'},
+  es: {tagline: 'Generá, revisá y sincronizá tu audio.', notes: '📝 Notas', process: '✨ Procesar', subtitles: '📝 Subtítulos', language: '🌐 Idioma', test: '🧪 Modo test · Entradas:', reuse: '♻️ Reutilizar audio temporal', noReuse: 'No reutilizar audio…'}
+};
+function applyInterfaceLanguage(language = 'en') {
+  const text = interfaceText[language] || interfaceText.en;
+  document.documentElement.lang = language;
+  const setText = (selector, value) => { const node = $(selector); if (node) node.textContent = value; };
+  setText('#appTagline', text.tagline);
+  if (notesButton?.firstChild) notesButton.firstChild.textContent = `${text.notes} `;
+  setText('#f button[type="submit"]', text.process);
+  setText('#f fieldset:first-of-type legend', text.subtitles);
+  const languageLabel = $('#f label select[name="lang"]')?.parentElement;
+  if (languageLabel?.firstChild) languageLabel.firstChild.textContent = text.language + ' ';
+  const testLabel = $('#f .test-option');
+  if (testLabel?.childNodes[2]) testLabel.childNodes[2].textContent = ` ${text.test} `;
+  if (tempDirectory?.parentElement?.firstChild) tempDirectory.parentElement.firstChild.textContent = text.reuse + ' ';
+  if (tempDirectory?.options?.[0]) tempDirectory.options[0].textContent = text.noReuse;
+  storageSet('videoTtsLanguage', language);
+}
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  if (themeToggle) themeToggle.textContent = theme === 'dark' ? '☀️' : '🌙';
+  storageSet('videoTtsTheme', theme);
+}
+const savedLanguage = storageGet('videoTtsLanguage') || 'en';
+if (uiLanguage) uiLanguage.value = savedLanguage;
+applyInterfaceLanguage(savedLanguage);
+applyTheme(storageGet('videoTtsTheme') || 'light');
+if (uiLanguage) uiLanguage.onchange = () => applyInterfaceLanguage(uiLanguage.value);
+if (themeToggle) themeToggle.onclick = () => applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
 
 function setFaviconProgress(percent) {
   const value = Number.isFinite(percent) ? Math.max(0, Math.min(100, Math.round(percent))) : null;
-  if (value === null) { favicon.href = '/web/favicon.svg'; return; }
-  const label = `${value}%`;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect x="3" y="8" width="58" height="48" rx="9" fill="#256a58"/><text x="32" y="39" text-anchor="middle" fill="white" font-family="Arial,sans-serif" font-size="20" font-weight="700">${label}</text></svg>`;
-  favicon.href = `data:image/svg+xml,${encodeURIComponent(svg)}`;
+  const url = value === null ? '/favicon.svg' : `/favicon.svg?progress=${value}&v=${Date.now()}`;
+  favicon.href = url;
 }
 
 function setNotesCount(count) { notesCount.textContent = String(count || 0); }
@@ -192,6 +227,8 @@ async function renderResults(files) {
   const bulkActions = document.createElement('div');
   bulkActions.className = 'bulk-actions';
   const selectionCount = document.createElement('span');
+  const selectAll = document.createElement('button');
+  selectAll.type = 'button'; selectAll.textContent = '☑️ Seleccionar todo';
   const downloadSelected = document.createElement('button');
   downloadSelected.type = 'button'; downloadSelected.textContent = '⬇️ Descargar seleccionados';
   const deleteSelected = document.createElement('button');
@@ -203,6 +240,15 @@ async function renderResults(files) {
     const count = selectedFiles().length;
     selectionCount.textContent = `${count} seleccionado${count === 1 ? '' : 's'}`;
     downloadSelected.disabled = !count; deleteSelected.disabled = !count;
+    const selectable = files.filter(file => file.deletable);
+    selectAll.textContent = selectable.length && count === selectable.length ? '☐ Deseleccionar todo' : '☑️ Seleccionar todo';
+    selectAll.disabled = !selectable.length;
+  };
+  selectAll.onclick = () => {
+    const selectable = files.filter(file => file.deletable);
+    const allSelected = selectable.length && selectable.every(file => selectedResultUrls.has(file.url));
+    selectable.forEach(file => allSelected ? selectedResultUrls.delete(file.url) : selectedResultUrls.add(file.url));
+    renderResults(files);
   };
   downloadSelected.onclick = () => {
     const query = new URLSearchParams();
@@ -228,7 +274,7 @@ async function renderResults(files) {
       logs.textContent = result.count ? `🧹 Se eliminaron ${result.count} carpeta(s) temporal(es).` : '🧹 No había carpetas temporales para eliminar.';
     } catch (error) { logs.textContent = `Error: ${error.message}`; }
   };
-  bulkActions.append(selectionCount, downloadSelected, deleteSelected, deleteTempFolders);
+  bulkActions.append(selectionCount, selectAll, downloadSelected, deleteSelected, deleteTempFolders);
   const list = document.createElement('ul');
   const viewer = document.createElement('div');
   viewer.id = 'viewer';
@@ -299,7 +345,7 @@ async function poll(id) {
   if (!status.done) return setTimeout(() => poll(id), 700);
   progressLabel.textContent = match ? progressLabel.textContent : '✅ Procesamiento finalizado';
   setFaviconProgress(null);
-  const jobResults = (status.files || []).map(file => ({...file, url: backendFileUrl(file.url)}));
+  const jobResults = (status.files || []).map(file => ({...file, url: backendFileUrl(file.url), deletable: true}));
   renderResults([...existingResults, ...jobResults]);
 }
 
@@ -307,7 +353,9 @@ function selectedOrUploaded(input) { return input.dataset.local ? {local: input.
 $('#f').onsubmit = async event => {
   event.preventDefault();
   const srt = await selectedOrUploaded(srtFile);
-  if (!srt) { logs.textContent = 'Seleccioná un archivo SRT.'; return; }
+  const youtube = event.currentTarget.elements.youtube.value.trim();
+  const continueFrom = tempDirectory?.value || '';
+  if (!srt && !youtube && !continueFrom) { logs.textContent = 'Select an SRT, YouTube URL or temporary folder.'; return; }
   progress.max = 1; progress.value = 0; progressLabel.textContent = '⏳ Preparando procesamiento…';
   setFaviconProgress(0);
   const options = Object.fromEntries(new FormData(event.currentTarget));
@@ -316,7 +364,7 @@ $('#f').onsubmit = async event => {
   options.fix_rate_not_truncate_pause = Number(options.fix_rate_not_truncate_pause || 1000);
   options.test_count = Number(options.test_count || 30);
   const selectedVideo = await selectedOrUploaded(videoFile);
-  if (options.fix_rate_not_truncate && selectedVideo) { logs.textContent = 'El modo audio plano solo se puede usar sin video.'; return; }
+  if (options.fix_rate_not_truncate && (selectedVideo || youtube)) { logs.textContent = 'Plain audio mode can only be used without video.'; return; }
   const response = await fetch(backendUrl('/run'), {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({srt, video: selectedVideo, opts: options})});
   const job = await response.json();
   if (!job.id) { logs.textContent = 'Error: ' + (job.error || 'No se pudo crear el trabajo'); setFaviconProgress(null); return; }
@@ -330,8 +378,12 @@ function updateCliCommand() {
   const srt = localSrt.value || srtFile.files[0]?.name || '<archivo.srt>';
   const video = localVideo.value || videoFile.files[0]?.name;
   const fixedRate = form.get('fix_rate_not_truncate') === 'on';
-  const args = ['python3', 'create_video_tts_from_srt.py', srt];
-  if (video && !fixedRate) args.push(video);
+  const youtube = form.get('youtube')?.trim();
+  const continueFrom = form.get('continue_from');
+  const args = ['python3', 'create_video_tts_from_srt.py'];
+  if (youtube) args.push('--youtube', youtube);
+  else if (continueFrom) args.push('--continue', continueFrom);
+  else { args.push(srt); if (video && !fixedRate) args.push(video); }
   args.push('--lang', form.get('lang') || 'es');
   if (form.get('test') === 'on') args.push('--test', form.get('test_count') || '30');
   if (fixedRate) {
@@ -456,6 +508,7 @@ async function refreshBackend() {
     delete videoFile.dataset.local;
     localSrt.replaceChildren(new Option('SRT de esta carpeta…', '')); populate(localSrt, files.srt || []);
     localVideo.replaceChildren(new Option('Video de esta carpeta…', '')); populate(localVideo, files.video || []);
+    if (tempDirectory) tempDirectory.replaceChildren(new Option(interfaceText[uiLanguage?.value || 'en'].noReuse, ''), ...(files.temp_dirs || []).map(name => new Option(name, name)));
     existingResults = (files.results || []).map(file => ({...file, url: backendFileUrl(file.url)}));
     await renderResults(existingResults);
     const options = await fetch(backendUrl('/options')).then(response => response.json());

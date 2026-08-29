@@ -119,7 +119,7 @@ import shutil
 import zipfile
 
 # Incrementar en cada actualización publicada (SemVer).
-APP_VERSION = "2.11.0"
+APP_VERSION = "2.15.0"
 
 NOTES_FILE = Path(__file__).resolve().parent / 'notas.txt'
 
@@ -3171,6 +3171,19 @@ def start_web_ui(port: int = 8765):
         def do_GET(self):
             parsed = urlparse(self.path)
             query = parse_qs(parsed.query)
+            if parsed.path == '/favicon.svg':
+                try:
+                    progress = int(query.get('progress', [''])[0])
+                except ValueError:
+                    progress = None
+                label = f'{max(0, min(100, progress))}%' if progress is not None else '▶'
+                svg = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect x="3" y="8" width="58" height="48" rx="9" fill="#256a58"/><text x="32" y="39" text-anchor="middle" fill="white" font-family="Arial,sans-serif" font-size="20" font-weight="700">{label}</text></svg>'
+                self.send_response(200)
+                self.send_header('Content-Type', 'image/svg+xml')
+                self.send_header('Cache-Control', 'no-store, max-age=0')
+                self.end_headers()
+                self.write_body(svg.encode())
+                return
             if parsed.path == '/info':
                 return self.send_json({'version': APP_VERSION})
             if parsed.path == '/notes':
@@ -3191,6 +3204,7 @@ def start_web_ui(port: int = 8765):
                     'video': [p.name for p in Path.cwd().iterdir() if p.is_file() and p.suffix.lower() in video_extensions],
                     'audio': [p.name for p in Path.cwd().iterdir() if p.is_file() and p.suffix.lower() in audio_extensions],
                     'results': existing_results(),
+                    'temp_dirs': sorted(path.name for path in Path.cwd().glob('temp_*') if path.is_dir() and not path.is_symlink() and (path / 'checkpoint.json').is_file()),
                 })
             if parsed.path == '/minimal':
                 self.send_response(200)
@@ -3289,12 +3303,25 @@ def start_web_ui(port: int = 8765):
                     path.write_bytes(base64.b64decode(item['data']))
                     return path
 
-                srt = local_or_saved(payload['srt'])
-                video = local_or_saved(payload.get('video'))
                 opts = payload.get('opts', {})
-                command = [sys.executable, '-u', str(Path(__file__).resolve()), str(srt)]
-                if video:
-                    command.append(str(video))
+                youtube_url = str(opts.get('youtube') or '').strip()
+                continue_from = str(opts.get('continue_from') or '').strip()
+                srt = local_or_saved(payload.get('srt'))
+                video = local_or_saved(payload.get('video'))
+                command = [sys.executable, '-u', str(Path(__file__).resolve())]
+                if youtube_url:
+                    command.extend(['--youtube', youtube_url])
+                elif continue_from:
+                    checkpoint_dir = Path.cwd() / Path(continue_from).name
+                    if not checkpoint_dir.is_dir() or not (checkpoint_dir / 'checkpoint.json').is_file():
+                        raise ValueError('La carpeta temporal elegida no contiene un checkpoint válido')
+                    command.extend(['--continue', str(checkpoint_dir)])
+                elif srt:
+                    command.append(str(srt))
+                    if video:
+                        command.append(str(video))
+                else:
+                    raise ValueError('Seleccioná un SRT, una URL de YouTube o una carpeta temporal')
                 for key in ('solo_audio', 'no_truncate', 'optimize_rate', 'no_freeze', 'remove_breaks', 'only_remove_breaks'):
                     if opts.get(key):
                         command.append('--' + key.replace('_', '-'))

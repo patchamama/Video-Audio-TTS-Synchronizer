@@ -61,6 +61,13 @@ def test_frontend_filters_tts_using_selected_language():
     assert "backendUrl('/delete-temp-folders')" in script
     assert 'setFaviconProgress' in script
     assert 'favicon.href' in script
+    assert "/favicon.svg?progress=" in script
+    assert 'applyTheme' in script
+    assert 'applyInterfaceLanguage' in script
+    assert "'--youtube'" in script
+    assert 'tempDirectory' in script
+    assert 'selectAll' in script
+    assert "deletable: true" in script
 
 
 def test_minimal_view_is_served_by_backend_not_web_assets():
@@ -80,6 +87,11 @@ def test_minimal_view_is_served_by_backend_not_web_assets():
     assert 'def remove_temp_directories' in source
     assert 'def set_terminal_progress' in source
     assert 'Video TTS · {percent}%' in source
+    assert "'temp_dirs'" in source
+    assert "if parsed.path == '/favicon.svg':" in source
+    assert "Cache-Control', 'no-store, max-age=0'" in source
+    assert "'--youtube'" in source
+    assert "'--continue'" in source
 
 
 def test_private_asset_fetch_uses_github_token(monkeypatch=None):
@@ -147,3 +159,10 @@ if __name__ == '__main__':
     test_downloads_missing_web_assets()
     test_uses_minimal_fallback_when_web_download_fails()
     test_downloads_from_published_branch_when_main_lacks_assets()
+
+def test_frontend_defaults_to_english_and_exposes_youtube_and_reuse():
+    page = (Path(__file__).parent.parent / 'web' / 'index.html').read_text(encoding='utf-8')
+    assert '<option value="en" selected>EN</option>' in page
+    assert 'name="youtube"' in page
+    assert 'id="tempDirectory"' in page
+    assert 'id="themeToggle"' in page

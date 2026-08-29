@@ -4,49 +4,51 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Video TTS</title>
-  <link id="favicon" rel="icon" type="image/svg+xml" href="/web/favicon.svg">
+  <link id="favicon" rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="stylesheet" href="/web/styles.css">
 </head>
 <body>
   <main>
-    <header class="app-header"><img class="app-icon" src="/web/favicon.svg" alt="Video TTS"><div><h1>Video TTS <span id="appVersion" class="version-badge" aria-label="Versión del programa"></span></h1><p>Generá, revisá y sincronizá tu audio.</p></div><button id="notesButton" class="mode-link" type="button">📝 Notas <sup id="notesCount">0</sup></button><a id="minimalMode" class="mode-link" href="/minimal">🪶 Vista mínima</a></header>
+    <header class="app-header"><img class="app-icon" src="/web/favicon.svg" alt="Video TTS"><div><h1>Video TTS <span id="appVersion" class="version-badge" aria-label="Versión del programa"></span></h1><p id="appTagline">Generate, review and synchronize your audio.</p></div><label class="toolbar-control">🌐 <select id="uiLanguage" aria-label="Interface language"><option value="en" selected>EN</option><option value="es">ES</option></select></label><button id="themeToggle" class="mode-link" type="button" aria-label="Toggle light or dark theme">🌙</button><button id="notesButton" class="mode-link" type="button">📝 Notes <sup id="notesCount">0</sup></button><a id="minimalMode" class="mode-link" href="/minimal">🪶 Vista mínima</a></header>
     <dialog id="notesDialog" class="notes-dialog"><section><header><h2>📝 Notas</h2><button id="closeNotes" type="button" aria-label="Cerrar notas">×</button></header><textarea id="notesEditor" rows="14" placeholder="Escribí tus notas…"></textarea><small id="notesStatus"></small><footer><button id="addTaskNote" type="button">+ - [ ]</button><button id="saveNotes" type="button">Guardar y sincronizar</button></footer></section></dialog>
     <label class="backend-selector">🔌 Backend API <input id="backendBase" type="url" aria-label="URL base del backend API"><button id="reloadBackend" type="button">Conectar</button></label>
     <form id="f">
-      <div id="drop">📥 Arrastrá un <strong>SRT</strong> o <strong>video</strong> acá, o seleccioná archivos</div>
-      <fieldset><legend>📝 Subtítulos</legend><select id="localSrt"><option value="">SRT de esta carpeta…</option></select><input id="srtFile" name="srt" type="file" accept=".srt"></fieldset>
-      <fieldset><legend>🎬 Videos</legend><select id="localVideo"><option value="">Video de esta carpeta…</option></select><input id="videoFile" name="video" type="file" accept="video/*"></fieldset>
-      <label>🌐 Idioma <select name="lang"><option value="es">Español</option><option value="en">English</option><option value="de">Deutsch</option><option value="fr">Français</option><option value="it">Italiano</option><option value="pt">Português</option></select></label>
-      <label class="test-option">🧪 <input name="test" type="checkbox"> Modo test · Entradas: <input name="test_count" type="number" min="1" step="1" value="30" aria-label="Cantidad de entradas para el modo test"></label>
+      <div id="drop">📥 Drop an <strong>SRT</strong> or <strong>video</strong> here, or choose files</div>
+      <fieldset><legend>📝 Subtitles</legend><select id="localSrt"><option value="">SRT from this folder…</option></select><input id="srtFile" name="srt" type="file" accept=".srt"></fieldset>
+      <fieldset><legend>🎬 Videos</legend><select id="localVideo"><option value="">Video from this folder…</option></select><input id="videoFile" name="video" type="file" accept="video/*"></fieldset>
+      <label>🌐 Language <select name="lang"><option value="es">Español</option><option value="en">English</option><option value="de">Deutsch</option><option value="fr">Français</option><option value="it">Italiano</option><option value="pt">Português</option></select></label>
+      <label class="test-option">🧪 <input name="test" type="checkbox"> Test mode · Entries: <input name="test_count" type="number" min="1" step="1" value="30" aria-label="Cantidad de entradas para el modo test"></label>
+      <label>📺 YouTube URL <input name="youtube" type="url" placeholder="https://youtube.com/watch?v=…"></label>
+      <label>♻️ Reuse temporary audio <select id="tempDirectory" name="continue_from"><option value="">Do not reuse audio…</option></select></label>
       <div id="options"></div>
-      <button>✨ Procesar</button>
+      <button>✨ Process</button>
     </form>
-    <section class="progress-panel" aria-live="polite"><label id="progressLabel" for="progress">⏳ Esperando procesamiento</label><progress id="progress" max="1" value="0"></progress></section>
-    <label><input id="autoScroll" type="checkbox" checked> Seguir automáticamente las últimas entradas</label>
-    <pre id="o">Esperando.</pre>
+    <section class="progress-panel" aria-live="polite"><label id="progressLabel" for="progress">⏳ Waiting for processing</label><progress id="progress" max="1" value="0"></progress></section>
+    <label><input id="autoScroll" type="checkbox" checked> Follow latest output automatically</label>
+    <pre id="o">Waiting.</pre>
     <details id="apiTest" class="api-test">
-      <summary>🧪 Probar endpoint de generación de audio</summary>
+      <summary>🧪 Test audio generation endpoint</summary>
       <form id="apiTestForm">
-        <label>URL del endpoint <input id="apiEndpoint" type="url"></label>
-        <label>Texto o SRT <textarea id="apiText" rows="5" placeholder="Escribí texto plano o pegá contenido SRT"></textarea></label>
-        <label>Archivo SRT <input id="apiSrtFile" type="file" accept=".srt"></label>
-        <label><input id="apiTextIsSrt" type="checkbox"> El texto está en formato SRT</label>
-        <label>Idioma <select id="apiLang"><option value="es">Español</option><option value="en">English</option><option value="de">Deutsch</option><option value="fr">Français</option><option value="it">Italiano</option><option value="pt">Português</option></select></label>
+        <label>Endpoint URL <input id="apiEndpoint" type="url"></label>
+        <label>Text or SRT <textarea id="apiText" rows="5" placeholder="Escribí texto plano o pegá contenido SRT"></textarea></label>
+        <label>SRT file <input id="apiSrtFile" type="file" accept=".srt"></label>
+        <label><input id="apiTextIsSrt" type="checkbox"> Text is in SRT format</label>
+        <label>Language <select id="apiLang"><option value="es">Español</option><option value="en">English</option><option value="de">Deutsch</option><option value="fr">Français</option><option value="it">Italiano</option><option value="pt">Português</option></select></label>
         <label>TTS <select id="apiTts" disabled><option>Cargando TTS instalados…</option></select></label>
-        <label>Voz instalada <select id="apiVoice" disabled><option>Elegí un TTS e idioma</option></select></label>
+        <label>Installed voice <select id="apiVoice" disabled><option>Elegí un TTS e idioma</option></select></label>
         <label>Rate <input id="apiRate" type="number" min="80" max="400" value="180"> ppm</label>
         <label><input id="apiFixedRate" type="checkbox"> Rate fijo</label>
-        <label>Duración objetivo (s) <input id="apiDuration" type="number" min="0.1" step="0.1" placeholder="Opcional"></label>
-        <label>Pausa entre líneas (ms) <input id="apiPause" type="number" min="0" step="100" value="1000"></label>
-        <button>Generar audio de prueba</button>
+        <label>Target duration (s) <input id="apiDuration" type="number" min="0.1" step="0.1" placeholder="Opcional"></label>
+        <label>Pause between lines (ms) <input id="apiPause" type="number" min="0" step="100" value="1000"></label>
+        <button>Generate test audio</button>
       </form>
       <div id="apiResult" aria-live="polite"></div>
     </details>
     <details id="cliPreview" class="api-test">
-      <summary>⌨️ Ver comando CLI equivalente</summary>
-      <p>Usa las opciones seleccionadas arriba. Los archivos subidos deben existir en la carpeta desde donde ejecutes el comando.</p>
+      <summary>⌨️ Show equivalent CLI command</summary>
+      <p>Uses the selected options. Uploaded files must exist in the directory where you run the command.</p>
       <pre><code id="cliCommand"></code></pre>
-      <button id="copyCliCommand" type="button">Copiar comando</button>
+      <button id="copyCliCommand" type="button">Copy command</button>
     </details>
     <div id="results"></div>
   </main>
