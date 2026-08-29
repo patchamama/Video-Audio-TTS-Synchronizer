@@ -92,6 +92,7 @@ def test_minimal_view_is_served_by_backend_not_web_assets():
     assert "Cache-Control', 'no-store, max-age=0'" in source
     assert "'--youtube'" in source
     assert "'--continue'" in source
+    assert "sys.executable, '-m', 'yt_dlp'" in source
 
 
 def test_private_asset_fetch_uses_github_token(monkeypatch=None):
@@ -166,3 +167,23 @@ def test_frontend_defaults_to_english_and_exposes_youtube_and_reuse():
     assert 'name="youtube"' in page
     assert 'id="tempDirectory"' in page
     assert 'id="themeToggle"' in page
+
+
+def test_starters_create_local_venv_download_assets_and_forward_arguments():
+    shell = (Path(__file__).parent.parent / 'start_video_tts.sh').read_text(encoding='utf-8')
+    batch = (Path(__file__).parent.parent / 'start_video_tts.bat').read_text(encoding='utf-8')
+    requirements = (Path(__file__).parent.parent / 'requirements.txt').read_text(encoding='utf-8')
+    assert 'python3' in shell and '-m venv' in shell and 'requirements.txt' in shell
+    assert 'create_video_tts_from_srt.py' in shell and 'web/$asset' in shell and '"$@"' in shell
+    assert 'py -3 -m venv' in batch and 'requirements.txt' in batch
+    assert 'create_video_tts_from_srt.py' in batch and '%*' in batch and 'web\\%%F' in batch
+    assert 'gTTS' in requirements and '\nyt-dlp\n' in f'\n{requirements}'
+
+
+def test_legacy_install_scripts_were_replaced_by_video_tts_starters():
+    root = Path(__file__).parent.parent
+    assert not (root / 'install.sh').exists()
+    assert not (root / 'install.bat').exists()
+    assert not (root / 'install_script.sh').exists()
+    assert (root / 'start_video_tts.sh').exists()
+    assert (root / 'start_video_tts.bat').exists()

@@ -119,48 +119,7 @@ import shutil
 import zipfile
 
 # Incrementar en cada actualización publicada (SemVer).
-APP_VERSION = "2.16.0"
-
-NOTES_FILE = Path(__file__).resolve().parent / 'notas.txt'
-
-
-def count_notes(content: str) -> int:
-    """Cuenta líneas de notas visibles, incluyendo tareas de checklist."""
-    return sum(bool(line.strip()) for line in content.splitlines())
-
-
-def remove_temp_directories(directory: Path) -> List[str]:
-    """Elimina únicamente directorios locales `temp_*`, sin seguir enlaces."""
-    deleted = []
-    for candidate in directory.glob('temp_*'):
-        if candidate.is_dir() and not candidate.is_symlink():
-            shutil.rmtree(candidate)
-            deleted.append(candidate.name)
-    return sorted(deleted)
-
-
-def set_terminal_progress(current: int, total: int) -> None:
-    """Actualiza el título de una terminal interactiva con el progreso actual."""
-    if not sys.stdout.isatty() or total <= 0:
-        return
-    percent = min(100, max(0, round(current / total * 100)))
-    sys.stdout.write(f'\033]0;Video TTS · {percent}%\007')
-    sys.stdout.flush()
-
-
-def sync_notes_to_github() -> dict:
-    """Versiona y publica solo notas.txt en el remoto Git configurado."""
-    repository = NOTES_FILE.parent
-    try:
-        subprocess.run(['git', '-C', str(repository), 'add', NOTES_FILE.name], check=True, capture_output=True, text=True)
-        changed = subprocess.run(['git', '-C', str(repository), 'diff', '--cached', '--quiet', '--', NOTES_FILE.name], capture_output=True, text=True).returncode == 1
-        if not changed:
-            return {'synced': True, 'message': 'Sin cambios pendientes en GitHub.'}
-        subprocess.run(['git', '-C', str(repository), 'commit', '-m', 'docs: update notes'], check=True, capture_output=True, text=True)
-        subprocess.run(['git', '-C', str(repository), 'push', 'origin', 'HEAD'], check=True, capture_output=True, text=True, timeout=60)
-        return {'synced': True, 'message': 'Notas guardadas y sincronizadas con GitHub.'}
-    except (OSError, subprocess.SubprocessError) as error:
-        return {'synced': False, 'message': f'Notas guardadas localmente; GitHub no se pudo sincronizar: {error}'}
+APP_VERSION = "2.9.0"
 
 
 def configure_console_output():
@@ -2017,12 +1976,8 @@ def main():
     no_truncate_lag = 0.0
 
     srt_filename = Path(args.srt_file).name
-    total_subtitles = len(subtitles)
-    set_terminal_progress(0, total_subtitles)
 
     for idx, subtitle in enumerate(subtitles):
-        progress_percent = (idx + 1) / total_subtitles * 100 if total_subtitles else 100
-        set_terminal_progress(idx + 1, total_subtitles)
         # El hueco hasta el siguiente subtítulo es la ventana de tiempo para
         # este audio; el último usa su propia duración.
         if idx + 1 < len(subtitles):
@@ -2032,7 +1987,7 @@ def main():
 
         # Skip already processed subtitles when resuming
         if subtitle.consecutive_id <= last_processed_id:
-            print(f"{Colors.CYAN}⏭️  Saltando subtítulo {subtitle.consecutive_id}/{len(subtitles)} · Progreso: {progress_percent:.0f}% (ya procesado){Colors.NC}")
+            print(f"{Colors.CYAN}⏭️  Saltando subtítulo {subtitle.consecutive_id}/{len(subtitles)} (ya procesado){Colors.NC}")
             # Still load the audio segment for final processing
             audio_file = temp_dir / f"{subtitle.consecutive_id}.wav"
             if audio_file.exists():
@@ -2056,7 +2011,7 @@ def main():
         clean_text = re.sub(r'<[^>]*>', '', subtitle.text)
 
         print(f"{Colors.YELLOW}{'━' * 50}{Colors.NC}")
-        print(f"{Colors.YELLOW}📄 {srt_filename} - Subtítulo {subtitle.consecutive_id}/{len(subtitles)} · Progreso: {progress_percent:.0f}%{Colors.NC}")
+        print(f"{Colors.YELLOW}📄 {srt_filename} - Subtítulo {subtitle.consecutive_id}/{len(subtitles)}{Colors.NC}")
         print(f"{Colors.CYAN}  (ID original: {subtitle.original_id}){Colors.NC}")
         print(f"{Colors.YELLOW}  Texto: {clean_text[:50]}...{Colors.NC}")
         print(f"{Colors.BLUE}  Duración subtítulo: {subtitle.duration:.3f}s{Colors.NC}")
@@ -3033,7 +2988,7 @@ def fetch_web_asset(url: str) -> bytes:
     return urlopen(Request(url, headers=headers), timeout=15).read()
 
 
-WEB_ASSET_NAMES = ('index.html', 'styles.css', 'app.js', 'favicon.svg')
+WEB_ASSET_NAMES = ('index.html', 'styles.css', 'app.js')
 # `main` es el destino estable; la rama publicada conserva el fallback mientras
 # esos assets llegan a main, para que el script autónomo siga siendo instalable.
 WEB_ASSETS_URLS = (
@@ -3171,24 +3126,8 @@ def start_web_ui(port: int = 8765):
         def do_GET(self):
             parsed = urlparse(self.path)
             query = parse_qs(parsed.query)
-            if parsed.path == '/favicon.svg':
-                try:
-                    progress = int(query.get('progress', [''])[0])
-                except ValueError:
-                    progress = None
-                label = f'{max(0, min(100, progress))}%' if progress is not None else '▶'
-                svg = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect x="3" y="8" width="58" height="48" rx="9" fill="#256a58"/><text x="32" y="39" text-anchor="middle" fill="white" font-family="Arial,sans-serif" font-size="20" font-weight="700">{label}</text></svg>'
-                self.send_response(200)
-                self.send_header('Content-Type', 'image/svg+xml')
-                self.send_header('Cache-Control', 'no-store, max-age=0')
-                self.end_headers()
-                self.write_body(svg.encode())
-                return
             if parsed.path == '/info':
                 return self.send_json({'version': APP_VERSION})
-            if parsed.path == '/notes':
-                content = NOTES_FILE.read_text(encoding='utf-8') if NOTES_FILE.is_file() else ''
-                return self.send_json({'content': content, 'count': count_notes(content), 'tracked': NOTES_FILE.is_file()})
             if parsed.path == '/api/tts':
                 engines = get_available_tts()
                 return self.send_json({
@@ -3204,7 +3143,6 @@ def start_web_ui(port: int = 8765):
                     'video': [p.name for p in Path.cwd().iterdir() if p.is_file() and p.suffix.lower() in video_extensions],
                     'audio': [p.name for p in Path.cwd().iterdir() if p.is_file() and p.suffix.lower() in audio_extensions],
                     'results': existing_results(),
-                    'temp_dirs': sorted(path.name for path in Path.cwd().glob('temp_*') if path.is_dir() and not path.is_symlink() and (path / 'checkpoint.json').is_file()),
                 })
             if parsed.path == '/minimal':
                 self.send_response(200)
@@ -3265,24 +3203,17 @@ def start_web_ui(port: int = 8765):
 
         def do_POST(self):
             path = urlparse(self.path).path
-            if path not in {'/run', '/api/generate-audio', '/delete', '/delete-temp-folders', '/notes'}:
+            if path not in {'/run', '/api/generate-audio', '/delete'}:
                 self.send_error(404)
                 return
             try:
                 payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
-                if path == '/notes':
-                    content = str(payload.get('content', ''))
-                    NOTES_FILE.write_text(content, encoding='utf-8')
-                    return self.send_json({'content': content, 'count': count_notes(content), 'github': sync_notes_to_github()})
                 if path == '/delete':
                     target = Path.cwd() / Path(payload.get('name', '')).name
                     if not target.is_file() or target.suffix.lower() not in result_extensions:
                         raise ValueError('El archivo no existe o no se puede borrar')
                     target.unlink()
                     return self.send_json({'deleted': target.name})
-                if path == '/delete-temp-folders':
-                    deleted = remove_temp_directories(Path.cwd())
-                    return self.send_json({'deleted': deleted, 'count': len(deleted)})
                 directory = Path(tempfile.mkdtemp(prefix='video_tts_web_'))
                 if path == '/api/generate-audio':
                     audio, metadata = generate_api_audio(payload, directory)
@@ -3303,25 +3234,12 @@ def start_web_ui(port: int = 8765):
                     path.write_bytes(base64.b64decode(item['data']))
                     return path
 
-                opts = payload.get('opts', {})
-                youtube_url = str(opts.get('youtube') or '').strip()
-                continue_from = str(opts.get('continue_from') or '').strip()
-                srt = local_or_saved(payload.get('srt'))
+                srt = local_or_saved(payload['srt'])
                 video = local_or_saved(payload.get('video'))
-                command = [sys.executable, '-u', str(Path(__file__).resolve())]
-                if youtube_url:
-                    command.extend(['--youtube', youtube_url])
-                elif continue_from:
-                    checkpoint_dir = Path.cwd() / Path(continue_from).name
-                    if not checkpoint_dir.is_dir() or not (checkpoint_dir / 'checkpoint.json').is_file():
-                        raise ValueError('La carpeta temporal elegida no contiene un checkpoint válido')
-                    command.extend(['--continue', str(checkpoint_dir)])
-                elif srt:
-                    command.append(str(srt))
-                    if video:
-                        command.append(str(video))
-                else:
-                    raise ValueError('Seleccioná un SRT, una URL de YouTube o una carpeta temporal')
+                opts = payload.get('opts', {})
+                command = [sys.executable, '-u', str(Path(__file__).resolve()), str(srt)]
+                if video:
+                    command.append(str(video))
                 for key in ('solo_audio', 'no_truncate', 'optimize_rate', 'no_freeze', 'remove_breaks', 'only_remove_breaks'):
                     if opts.get(key):
                         command.append('--' + key.replace('_', '-'))

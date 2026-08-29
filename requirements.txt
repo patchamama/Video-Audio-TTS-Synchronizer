@@ -1,0 +1,5 @@
+gTTS
+pydub
+edge-tts
+pyttsx3
+yt-dlp

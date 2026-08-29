@@ -4,13 +4,13 @@ Sistema inteligente de sincronización de audio TTS (Text-to-Speech) con video a
 
 ## ⚡ Instalación rápida desde CLI
 
-Sin `git clone`: descargá el único archivo Python, instalá sus dependencias y abrí la interfaz web en el mismo comando.
+Sin `git clone`: descargá el lanzador, ejecutalo y este descarga/actualiza el archivo Python y la interfaz `web/`, crea `.venv` local e instala los requisitos. Sin parámetros abre la web; cualquier parámetro se reenvía al programa.
 
-**macOS / Linux:** `curl -fsSLO https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/main/create_video_tts_from_srt.py && python3 create_video_tts_from_srt.py --install-dependencies && python3 create_video_tts_from_srt.py --web`
+**macOS / Linux:** `curl -fsSLO https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/main/start_video_tts.sh && chmod +x start_video_tts.sh && ./start_video_tts.sh`
 
-**Windows (PowerShell):** `iwr https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/main/create_video_tts_from_srt.py -OutFile create_video_tts_from_srt.py; py create_video_tts_from_srt.py --install-dependencies; py create_video_tts_from_srt.py --web`
+**Windows (PowerShell):** `iwr https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/main/start_video_tts.bat -OutFile start_video_tts.bat; .\start_video_tts.bat`
 
-El archivo queda en la carpeta actual y luego podés iniciarlo rápidamente con `python3 create_video_tts_from_srt.py --web` (o `py create_video_tts_from_srt.py --web` en Windows).
+Ejemplo CLI: `./start_video_tts.sh --youtube ULKkrkIJ0h8 --lang de` (Windows: `start_video_tts.bat --youtube ULKkrkIJ0h8 --lang de`). `yt-dlp` se instala desde `requirements.txt` en el entorno `.venv` en todas las plataformas, incluida macOS; el programa lo ejecuta con el mismo Python para evitar usar una copia distinta del PATH.
 
 ## 📋 Tabla de Contenidos
 
@@ -1263,17 +1263,16 @@ wget https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/m
 ---
 
 **Última actualización:** 2026-08-28
-**Versión:** 2.16.0 (Python rewrite)
+**Versión:** 2.19.0 (Python rewrite)
 
 La versión se incrementa en cada actualización publicada siguiendo [Semantic Versioning](https://semver.org/lang/es/).
 
 ## Instalación y interfaz web autónomas
 
-El archivo `create_video_tts_from_srt.py` incorpora `--install-dependencies` para instalar FFmpeg y los paquetes Python requeridos según el sistema operativo. Los lanzadores sin lógica adicional son `install.sh` y `install.bat`.
+El archivo `create_video_tts_from_srt.py` incorpora `--install-dependencies` para instalar FFmpeg y los paquetes Python requeridos según el sistema operativo. Los lanzadores `start_video_tts.sh` y `start_video_tts.bat` crean un entorno `.venv`, instalan `requirements.txt`, actualizan los assets desde GitHub y reenvían parámetros al programa.
 
 ```bash
-./install.sh
-python3 create_video_tts_from_srt.py --web
+./start_video_tts.sh
 ```
 
 Sin parámetros, el script muestra la URL y abre la interfaz local `http://127.0.0.1:8765`. La UI permite cargar SRT, video opcional, idioma y las opciones de audio disponibles; el backend local ejecuta el mismo CLI.
