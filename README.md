@@ -2,6 +2,10 @@
 
 Sistema inteligente de sincronización de audio TTS (Text-to-Speech) con video a partir de archivos de subtítulos SRT.
 
+## ⚡ Instalación rápida desde CLI
+
+**macOS / Linux:** `git clone https://github.com/patchamama/Video-Audio-TTS-Synchronizer.git && cd Video-Audio-TTS-Synchronizer && ./install.sh` · **Windows (PowerShell):** `git clone https://github.com/patchamama/Video-Audio-TTS-Synchronizer.git; cd Video-Audio-TTS-Synchronizer; .\install.bat`
+
 ## 📋 Tabla de Contenidos
 
 - [Descripción](#-descripción)
@@ -1253,7 +1257,7 @@ wget https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/m
 ---
 
 **Última actualización:** 2026-08-28
-**Versión:** 2.7.1 (Python rewrite)
+**Versión:** 2.9.0 (Python rewrite)
 
 La versión se incrementa en cada actualización publicada siguiendo [Semantic Versioning](https://semver.org/lang/es/).
 
@@ -1271,6 +1275,8 @@ Sin parámetros, el script muestra la URL y abre la interfaz local `http://127.0
 La interfaz avanzada permite cambiar **Backend API**. Por defecto usa el backend local de la misma URL (`http://127.0.0.1:8765`); al conectarte a otro backend, recarga versión, archivos, opciones, TTS e idiomas desde esa API. Un backend externo debe permitir CORS desde el origen donde se sirve la interfaz.
 
 Debajo de la prueba de endpoint, la sección contraída **«Ver comando CLI equivalente»** construye y permite copiar la línea de terminal según los archivos y opciones seleccionadas en la interfaz.
+
+La vista avanzada muestra al abrirse los videos, audios y subtítulos ya existentes como resultados interactivos; los controles son iconos para abrir, descargar y borrar los archivos locales. También permite seleccionar varios archivos para descargarlos en un ZIP o borrarlos en lote.
 
 ### API local de generación de audio
 

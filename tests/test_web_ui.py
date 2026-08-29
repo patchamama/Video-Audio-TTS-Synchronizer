@@ -35,6 +35,10 @@ def test_frontend_filters_tts_using_selected_language():
     assert "'--fix-rate-not-truncate'" in script
     assert 'function seekPlayerToCue(player, cue)' in script
     assert "addEventListener('loadedmetadata', seek" in script
+    assert "backendUrl('/delete')" in script
+    assert 'existingResults' in script
+    assert "backendUrl(`/download?${query}`)" in script
+    assert 'selectedResultUrls' in script
 
 
 def test_minimal_view_is_served_by_backend_not_web_assets():
@@ -46,6 +50,9 @@ def test_minimal_view_is_served_by_backend_not_web_assets():
     assert "fetch('/info')" in source
     assert "fetch('/files')" in source
     assert "fetch('/options')" in source
+    assert "'/existing?name=" in source
+    assert "path not in {'/run', '/api/generate-audio', '/delete'}" in source
+    assert "if parsed.path == '/download':" in source
 
 
 def test_private_asset_fetch_uses_github_token(monkeypatch=None):

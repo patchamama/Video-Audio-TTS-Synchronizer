@@ -105,19 +105,21 @@ import uuid
 import base64
 import http.server
 import importlib.util
+import io
 import webbrowser
 import threading
 import mimetypes
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 from urllib.request import Request, urlopen
 from urllib.error import URLError
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import shutil
+import zipfile
 
 # Incrementar en cada actualización publicada (SemVer).
-APP_VERSION = "2.7.1"
+APP_VERSION = "2.9.0"
 
 
 def configure_console_output():
@@ -3030,6 +3032,16 @@ def ensure_web_assets(web_dir: Optional[Path] = None, fetcher=None) -> Optional[
 def start_web_ui(port: int = 8765):
     """UI local con progreso en vivo, resultados y reproducción sincronizada."""
     jobs = {}
+    result_extensions = {'.wav', '.aac', '.mp3', '.ogg', '.m4a', '.mkv', '.mp4', '.mov', '.avi', '.webm', '.srt'}
+    audio_extensions = {'.wav', '.aac', '.mp3', '.ogg', '.m4a'}
+    video_extensions = {'.mkv', '.mp4', '.mov', '.avi', '.webm'}
+
+    def existing_results():
+        """Archivos ya presentes, agrupados para mostrarlos al abrir la UI."""
+        all_files = [path for path in Path.cwd().iterdir() if path.is_file() and path.suffix.lower() in result_extensions]
+        ordered = sorted(all_files, key=lambda path: (0 if path.suffix.lower() in video_extensions else 1 if path.suffix.lower() in audio_extensions else 2, path.name.lower()))
+        return [{'name': path.name, 'url': f'/existing?name={quote(path.name)}',
+                 'audio': path.suffix.lower() in audio_extensions, 'deletable': True} for path in ordered]
     web_dir = ensure_web_assets()
     page = """<!doctype html><html lang=es><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Video TTS · Vista mínima</title><style>:root{font:16px system-ui;color:#253238;background:#f4f7f5}body{max-width:680px;margin:auto;padding:1.5rem}form,pre,#results{display:grid;gap:12px;background:#fff;padding:1.2rem;border-radius:12px;margin:1rem 0;box-shadow:0 2px 10px #18382b0d}label{display:grid;gap:.35rem}input,select,button{padding:.7rem;border:1px solid #dce5e1;border-radius:8px}button{background:#256a58;color:#fff;font-weight:700;cursor:pointer}pre{white-space:pre-wrap;max-height:320px;overflow:auto}a{display:block;color:#256a58;font-weight:650;margin:.5rem 0}#options{display:grid;gap:.5rem}</style><main><h1>🎙️ Video TTS <small id=version></small></h1><p>Vista mínima servida directamente por el backend.</p><form id=minimalForm><label>📝 SRT de esta carpeta <select id=localSrt><option value="">Seleccioná…</option></select></label><label>o subir SRT <input id=srt type=file accept=.srt></label><label>🎬 Video de esta carpeta <select id=localVideo><option value="">Sin video</option></select></label><label>o subir video <input id=video type=file accept="video/*"></label><label>🌐 Idioma <select id=lang name=lang><option value=es>Español</option><option value=en>English</option><option value=de>Deutsch</option><option value=fr>Français</option><option value=it>Italiano</option><option value=pt>Português</option></select></label><div id=options></div><button>✨ Procesar</button></form><p id=status>Cargando configuración del backend…</p><pre id=output></pre><div id=results></div></main><script>const $=s=>document.querySelector(s),read=async f=>{if(!f)return null;let text='',bytes=new Uint8Array(await f.arrayBuffer());for(const b of bytes)text+=String.fromCharCode(b);return{name:f.name,data:btoa(text)}},add=(select,names)=>names.forEach(name=>select.add(new Option(name,name))),selected=async(input,local)=>local.value?{local:local.value}:read(input.files[0]);async function poll(id){const data=await fetch('/status?id='+encodeURIComponent(id)).then(r=>r.json());$('#output').textContent=data.output||data.error||'';if(!data.done)return setTimeout(()=>poll(id),700);$('#status').textContent='✅ Procesamiento finalizado';$('#results').replaceChildren(...(data.files||[]).map(file=>{const link=document.createElement('a');link.href=file.url;link.download=file.name;link.textContent='⬇ '+file.name;return link}))}async function load(){try{const[info,files,options]=await Promise.all([fetch('/info').then(r=>r.json()),fetch('/files').then(r=>r.json()),fetch('/options').then(r=>r.json())]);$('#version').textContent='v'+info.version;add($('#localSrt'),files.srt||[]);add($('#localVideo'),files.video||[]);$('#options').replaceChildren(...options.map(option=>{const label=document.createElement('label'),input=document.createElement('input');input.type='checkbox';input.name=option.name;label.append(input,' '+option.label);return label}));$('#status').textContent='Esperando un SRT.'}catch(error){$('#status').textContent='No se pudo cargar la configuración del backend: '+error.message}}load();$('#minimalForm').onsubmit=async event=>{event.preventDefault();const srt=await selected($('#srt'),$('#localSrt'));if(!srt){$('#status').textContent='Seleccioná o subí un SRT.';return}$('#status').textContent='⏳ Preparando procesamiento…';const video=await selected($('#video'),$('#localVideo')),opts=Object.fromEntries(new FormData(event.currentTarget));for(const key of ['solo_audio','no_truncate','optimize_rate','fix_rate_not_truncate','no_freeze','remove_breaks','only_remove_breaks'])opts[key]=opts[key]==='on';const response=await fetch('/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({srt,video,opts})}),job=await response.json();if(!job.id){$('#status').textContent='Error: '+(job.error||'No se pudo crear el trabajo');return}poll(job.id)}</script></html>"""
 
@@ -3097,6 +3109,20 @@ def start_web_ui(port: int = 8765):
             except (BrokenPipeError, ConnectionResetError):
                 pass
 
+        def send_zip(self, paths):
+            """Empaqueta resultados locales seleccionados sin exponer rutas arbitrarias."""
+            output = io.BytesIO()
+            with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as archive:
+                for path in paths:
+                    archive.write(path, path.name)
+            payload = output.getvalue()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/zip')
+            self.send_header('Content-Disposition', 'attachment; filename="video-tts-resultados.zip"')
+            self.send_header('Content-Length', str(len(payload)))
+            self.end_headers()
+            self.write_body(payload)
+
         def do_GET(self):
             parsed = urlparse(self.path)
             query = parse_qs(parsed.query)
@@ -3112,7 +3138,12 @@ def start_web_ui(port: int = 8765):
             if parsed.path == '/options':
                 return self.send_json([{'name': 'solo_audio', 'label': 'Solo audio'}, {'name': 'no_truncate', 'label': 'No truncar'}, {'name': 'optimize_rate', 'label': 'Optimizar rate tras 50 entradas'}, {'name': 'fix_rate_not_truncate', 'label': 'Audio plano sin truncar ni pausas SRT', 'rate_name': 'fix_rate_not_truncate_rate', 'default': 200, 'pause_name': 'fix_rate_not_truncate_pause', 'pause_default': 1000}, {'name': 'no_freeze', 'label': 'No freeze'}, {'name': 'remove_breaks', 'label': 'Eliminar pausas'}, {'name': 'only_remove_breaks', 'label': 'Solo eliminar pausas'}])
             if parsed.path == '/files':
-                return self.send_json({'srt': [p.name for p in Path.cwd().iterdir() if p.is_file() and p.suffix.lower() == '.srt'], 'video': [p.name for p in Path.cwd().iterdir() if p.is_file() and p.suffix.lower() in {'.mp4', '.mkv', '.mov', '.avi', '.webm'}]})
+                return self.send_json({
+                    'srt': [p.name for p in Path.cwd().iterdir() if p.is_file() and p.suffix.lower() == '.srt'],
+                    'video': [p.name for p in Path.cwd().iterdir() if p.is_file() and p.suffix.lower() in video_extensions],
+                    'audio': [p.name for p in Path.cwd().iterdir() if p.is_file() and p.suffix.lower() in audio_extensions],
+                    'results': existing_results(),
+                })
             if parsed.path == '/minimal':
                 self.send_response(200)
                 self.send_header('Content-Type', 'text/html; charset=utf-8')
@@ -3141,6 +3172,24 @@ def start_web_ui(port: int = 8765):
                     self.send_error(404)
                     return
                 return self.send_file(path)
+            if parsed.path == '/existing':
+                path = Path.cwd() / Path(query.get('name', [''])[0]).name
+                if not path.is_file() or path.suffix.lower() not in result_extensions:
+                    self.send_error(404)
+                    return
+                return self.send_file(path)
+            if parsed.path == '/download':
+                paths = []
+                for name in query.get('name', []):
+                    path = Path.cwd() / Path(name).name
+                    if not path.is_file() or path.suffix.lower() not in result_extensions:
+                        self.send_error(404)
+                        return
+                    paths.append(path)
+                if not paths:
+                    self.send_error(400, 'Seleccioná al menos un archivo')
+                    return
+                return self.send_zip(paths)
             if web_dir:
                 self.send_response(302)
                 self.send_header('Location', '/web/index.html')
@@ -3154,11 +3203,17 @@ def start_web_ui(port: int = 8765):
 
         def do_POST(self):
             path = urlparse(self.path).path
-            if path not in {'/run', '/api/generate-audio'}:
+            if path not in {'/run', '/api/generate-audio', '/delete'}:
                 self.send_error(404)
                 return
             try:
                 payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                if path == '/delete':
+                    target = Path.cwd() / Path(payload.get('name', '')).name
+                    if not target.is_file() or target.suffix.lower() not in result_extensions:
+                        raise ValueError('El archivo no existe o no se puede borrar')
+                    target.unlink()
+                    return self.send_json({'deleted': target.name})
                 directory = Path(tempfile.mkdtemp(prefix='video_tts_web_'))
                 if path == '/api/generate-audio':
                     audio, metadata = generate_api_audio(payload, directory)

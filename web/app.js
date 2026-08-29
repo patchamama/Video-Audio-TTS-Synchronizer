@@ -12,6 +12,8 @@ let activeBackendBase = backendBase.value;
 const backendUrl = path => new URL(path, backendBase.value || location.origin).toString();
 const backendFileUrl = url => new URL(url, backendBase.value || location.origin).toString();
 const outputFiles = () => $('#results');
+let existingResults = [];
+const selectedResultUrls = new Set();
 const audioExtensions = new Set(['wav', 'aac', 'mp3', 'ogg', 'm4a']);
 const videoExtensions = new Set(['mp4', 'mkv', 'mov', 'avi', 'webm']);
 const isMinimalMode = new URLSearchParams(location.search).get('mode') === 'minimal';
@@ -147,6 +149,35 @@ async function renderResults(files) {
   const help = document.createElement('p');
   help.className = 'result-help';
   help.textContent = 'Seleccioná un audio, video o SRT para abrirlo en el visor sincronizado.';
+  const bulkActions = document.createElement('div');
+  bulkActions.className = 'bulk-actions';
+  const selectionCount = document.createElement('span');
+  const downloadSelected = document.createElement('button');
+  downloadSelected.type = 'button'; downloadSelected.textContent = '⬇️ Descargar seleccionados';
+  const deleteSelected = document.createElement('button');
+  deleteSelected.type = 'button'; deleteSelected.textContent = '🗑️ Borrar seleccionados'; deleteSelected.className = 'delete-action';
+  const selectedFiles = () => files.filter(file => file.deletable && selectedResultUrls.has(file.url));
+  const updateBulkActions = () => {
+    const count = selectedFiles().length;
+    selectionCount.textContent = `${count} seleccionado${count === 1 ? '' : 's'}`;
+    downloadSelected.disabled = !count; deleteSelected.disabled = !count;
+  };
+  downloadSelected.onclick = () => {
+    const query = new URLSearchParams();
+    selectedFiles().forEach(file => query.append('name', file.name));
+    const link = document.createElement('a');
+    link.href = backendUrl(`/download?${query}`); link.download = 'video-tts-resultados.zip'; link.click();
+  };
+  deleteSelected.onclick = async () => {
+    const selected = selectedFiles();
+    if (!selected.length || !confirm(`¿Borrar ${selected.length} archivo(s) seleccionado(s)?`)) return;
+    const responses = await Promise.all(selected.map(file => fetch(backendUrl('/delete'), {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: file.name})})));
+    if (responses.some(response => !response.ok)) { logs.textContent = 'No se pudieron borrar todos los archivos seleccionados.'; return; }
+    selected.forEach(file => selectedResultUrls.delete(file.url));
+    existingResults = existingResults.filter(file => !selected.some(candidate => candidate.name === file.name));
+    renderResults(files.filter(file => !selected.some(candidate => candidate.name === file.name)));
+  };
+  bulkActions.append(selectionCount, downloadSelected, deleteSelected);
   const list = document.createElement('ul');
   const viewer = document.createElement('div');
   viewer.id = 'viewer';
@@ -163,19 +194,40 @@ async function renderResults(files) {
   files.forEach(file => {
     const item = document.createElement('li');
     item.className = `result-file ${fileKind(file)}`;
+    if (file.deletable) {
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox'; checkbox.checked = selectedResultUrls.has(file.url); checkbox.setAttribute('aria-label', `Seleccionar ${file.name}`);
+      checkbox.onchange = () => { if (checkbox.checked) selectedResultUrls.add(file.url); else selectedResultUrls.delete(file.url); updateBulkActions(); };
+      item.append(checkbox);
+    }
     const name = resultLink(`${iconFor(file)} ${file.name}`, 'file-name', async () => {
       if (fileKind(file) === 'subtitle') selectedSubtitle = file;
       else if (fileKind(file) === 'audio' || fileKind(file) === 'video') selectedMedia = file;
       await updateViewer(); viewer.scrollIntoView({behavior: 'smooth', block: 'start'});
     });
     const open = document.createElement('a');
-    open.href = file.url; open.target = '_blank'; open.rel = 'noopener'; open.textContent = 'Abrir';
+    open.href = file.url; open.target = '_blank'; open.rel = 'noopener'; open.textContent = '↗️'; open.title = 'Abrir'; open.setAttribute('aria-label', 'Abrir'); open.className = 'result-action';
     const download = document.createElement('a');
-    download.href = file.url; download.download = file.name; download.textContent = 'Descargar';
+    download.href = file.url; download.download = file.name; download.textContent = '⬇️'; download.title = 'Descargar'; download.setAttribute('aria-label', 'Descargar'); download.className = 'result-action';
     item.append(name, open, download);
+    if (file.deletable) {
+      const remove = document.createElement('button');
+      remove.type = 'button'; remove.textContent = '🗑️'; remove.title = 'Borrar'; remove.setAttribute('aria-label', `Borrar ${file.name}`); remove.className = 'result-action delete-action';
+      remove.onclick = async () => {
+        if (!confirm(`¿Borrar ${file.name}?`)) return;
+        const response = await fetch(backendUrl('/delete'), {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: file.name})});
+        const result = await response.json();
+        if (!response.ok) { logs.textContent = `Error: ${result.error || 'No se pudo borrar el archivo'}`; return; }
+        existingResults = existingResults.filter(candidate => candidate.name !== file.name);
+        selectedResultUrls.delete(file.url);
+        renderResults(files.filter(candidate => candidate.name !== file.name));
+      };
+      item.append(remove);
+    }
     list.append(item);
   });
-  section.append(title, help, list, viewer);
+  updateBulkActions();
+  section.append(title, help, bulkActions, list, viewer);
   panel.append(section);
   await updateViewer();
 }
@@ -193,7 +245,8 @@ async function poll(id) {
   }
   if (!status.done) return setTimeout(() => poll(id), 700);
   progressLabel.textContent = match ? progressLabel.textContent : '✅ Procesamiento finalizado';
-  renderResults((status.files || []).map(file => ({...file, url: backendFileUrl(file.url)})));
+  const jobResults = (status.files || []).map(file => ({...file, url: backendFileUrl(file.url)}));
+  renderResults([...existingResults, ...jobResults]);
 }
 
 function selectedOrUploaded(input) { return input.dataset.local ? {local: input.dataset.local} : readFile(input.files[0]); }
@@ -201,7 +254,7 @@ $('#f').onsubmit = async event => {
   event.preventDefault();
   const srt = await selectedOrUploaded(srtFile);
   if (!srt) { logs.textContent = 'Seleccioná un archivo SRT.'; return; }
-  progress.max = 1; progress.value = 0; progressLabel.textContent = '⏳ Preparando procesamiento…'; outputFiles().replaceChildren();
+  progress.max = 1; progress.value = 0; progressLabel.textContent = '⏳ Preparando procesamiento…';
   const options = Object.fromEntries(new FormData(event.currentTarget));
   ['solo_audio', 'no_truncate', 'optimize_rate', 'fix_rate_not_truncate', 'no_freeze', 'remove_breaks', 'only_remove_breaks', 'test'].forEach(key => { options[key] = options[key] === 'on'; });
   options.fix_rate_not_truncate_rate = Number(options.fix_rate_not_truncate_rate || 200);
@@ -348,6 +401,8 @@ async function refreshBackend() {
     delete videoFile.dataset.local;
     localSrt.replaceChildren(new Option('SRT de esta carpeta…', '')); populate(localSrt, files.srt || []);
     localVideo.replaceChildren(new Option('Video de esta carpeta…', '')); populate(localVideo, files.video || []);
+    existingResults = (files.results || []).map(file => ({...file, url: backendFileUrl(file.url)}));
+    await renderResults(existingResults);
     const options = await fetch(backendUrl('/options')).then(response => response.json());
     renderOptions(options);
     if (!previousApiEndpoint || previousApiEndpoint === oldDefault) apiEndpoint.value = backendUrl('/api/generate-audio');
