@@ -119,7 +119,7 @@ import shutil
 import zipfile
 
 # Incrementar en cada actualización publicada (SemVer).
-APP_VERSION = "2.30.0"
+APP_VERSION = "2.37.0"
 
 NOTES_FILE = Path(__file__).resolve().parent / 'notas.txt'
 
@@ -484,6 +484,12 @@ def get_available_tts() -> List[dict]:
         'voices': get_elevenlabs_voices() if config else [], 'credits': get_elevenlabs_credits(),
     })
     return engines
+
+
+def is_paid_tts_quota_error(detail: Optional[str]) -> bool:
+    """Indica si el proveedor pago agotó cuota y conviene pasar a un motor gratuito."""
+    message = (detail or '').lower()
+    return any(marker in message for marker in ('quota_exceeded', 'quota exceeded', 'insufficient_credits', 'credit balance', 'credits remaining'))
 
 
 class TTSEngine:
@@ -991,6 +997,21 @@ class TTSEngine:
             return False
 
         return False
+
+def get_free_tts_fallback(language: str, excluded: Optional[str] = None) -> Optional[TTSEngine]:
+    """Devuelve el primer TTS gratuito/local disponible para continuar una generación."""
+    available = {item['id'] for item in get_available_tts()}
+    system = platform.system()
+    preferred = (
+        ('say', 'sapi', 'espeak-ng', 'edge-tts', 'gtts') if system == 'Darwin' else
+        ('sapi', 'edge-tts', 'espeak-ng', 'gtts') if system == 'Windows' else
+        ('espeak-ng', 'edge-tts', 'gtts')
+    )
+    for candidate in preferred:
+        if candidate != excluded and candidate in available:
+            return TTSEngine(language=language, tts_method=candidate)
+    return None
+
 
 class SRTParser:
     """Parsea y valida archivos SRT"""
@@ -1806,8 +1827,9 @@ API_RATE_CANDIDATES = (180, 200, 220, 240)
 def _concat_wav_batch(parts: List[Path], output: Path) -> None:
     """Une un lote de WAVs con el demuxer concat de ffmpeg."""
     manifest = output.with_suffix('.txt')
+    entries = ("file '" + str(part.resolve()).replace("'", "'\\\\''") + "'\n" for part in parts)
     manifest.write_text(
-        ''.join(f"file '{str(part.resolve()).replace("'", "'\\\\''")}'\n" for part in parts),
+        ''.join(entries),
         encoding='utf-8',
     )
     try:
@@ -1893,24 +1915,47 @@ def generate_api_audio(payload: dict, directory: Path) -> Tuple[Path, dict]:
         raise ValueError('merge_batch_size debe ser mayor que cero')
     report_progress(f"TTS: preparando {len(lines)} fragmentos con {requested_tts or 'motor automático'}.")
     engine = TTSEngine(language=language, tts_method=requested_tts, tts_voice=requested_voice)
+    engines_used: List[str] = []
+    fallback_reason: Optional[str] = None
     candidates = []
     for rate in dict.fromkeys(rates):
         rate_dir = directory / f'rate_{rate}'
-        rate_dir.mkdir()
+        rate_dir.mkdir(exist_ok=True)
         fragment_parts = []
         for index, line in enumerate(lines):
-            report_progress(f"TTS: generando fragmento {index + 1}/{len(lines)} a {rate} wpm.")
             audio_file = rate_dir / f'{index}.wav'
-            if not engine.generate_audio(re.sub(r'<[^>]*>', '', line), rate, audio_file):
-                detail = f': {engine.last_error}' if engine.last_error else ''
-                raise RuntimeError(f'No se pudo generar audio a {rate} wpm{detail}')
-            if get_audio_duration(audio_file) <= 0:
-                raise RuntimeError(f'ElevenLabs o el TTS devolvió un audio vacío a {rate} wpm')
+            if audio_file.is_file() and get_audio_duration(audio_file) > 0:
+                report_progress(f"TTS: reutilizando fragmento {index + 1}/{len(lines)} ya generado.")
+                engines_used.append('caché')
+            else:
+                audio_file.unlink(missing_ok=True)
+                report_progress(f"TTS: generando fragmento {index + 1}/{len(lines)} a {rate} wpm.")
+                generated = engine.generate_audio(re.sub(r'<[^>]*>', '', line), rate, audio_file)
+                if not generated and requested_tts == 'elevenlabs' and is_paid_tts_quota_error(engine.last_error):
+                    fallback = get_free_tts_fallback(language, excluded='elevenlabs')
+                    if fallback:
+                        fallback_reason = engine.last_error
+                        engine = fallback
+                        report_progress(f"TTS: cuota de ElevenLabs agotada; continuando con {engine.get_tts_name()} gratuito/local.")
+                        generated = engine.generate_audio(re.sub(r'<[^>]*>', '', line), rate, audio_file)
+                    else:
+                        raise RuntimeError('La cuota de ElevenLabs se agotó y no hay un TTS gratuito/local disponible para continuar.')
+                if not generated:
+                    detail = f': {engine.last_error}' if engine.last_error else ''
+                    raise RuntimeError(f'No se pudo generar audio a {rate} wpm{detail}')
+                if get_audio_duration(audio_file) <= 0:
+                    audio_file.unlink(missing_ok=True)
+                    raise RuntimeError(f'ElevenLabs o el TTS devolvió un audio vacío a {rate} wpm')
+                engines_used.append(engine.get_tts_name())
             parts = [audio_file]
             report_progress(f"TTS: fragmento {index + 1}/{len(lines)} generado.")
             if pause_ms and index + 1 < len(lines):
                 silence = rate_dir / f'pause_{index}.wav'
-                create_silence(pause_ms / 1000.0, silence)
+                if silence.is_file() and get_audio_duration(silence) > 0:
+                    report_progress(f"TTS: reutilizando pausa tras el fragmento {index + 1}.")
+                else:
+                    silence.unlink(missing_ok=True)
+                    create_silence(pause_ms / 1000.0, silence)
                 parts.append(silence)
                 report_progress(f"TTS: pausa de {pause_ms} ms agregada tras el fragmento {index + 1}.")
             fragment_parts.append(parts)
@@ -1945,7 +1990,8 @@ def generate_api_audio(payload: dict, directory: Path) -> Tuple[Path, dict]:
         'pause_ms': pause_ms, 'source_type': source_type, 'cues': cues,
         'fragment_count': len(lines), 'merge_batch_size': batch_size,
         'output_format': output_format,
-        'tts_requested': requested_tts, 'tts_used': engine.get_tts_name(),
+        'tts_requested': requested_tts, 'tts_used': ' → '.join(dict.fromkeys(engines_used)) or engine.get_tts_name(),
+        'tts_fallback_reason': fallback_reason,
         'voice_requested': requested_voice, 'voice_used': getattr(engine, 'say_voice', None),
     }
 

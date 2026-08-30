@@ -39,6 +39,11 @@ venv.bak/
 Thumbs.db
 
 # Project specific
+.srt-essay-secrets.json
+trabajos-generados/
+_work/
+youtube_*/
+*_fixed_rate_*_audio.*
 temp_audio_*/
 temp_breaks_*/
 *_working.srt

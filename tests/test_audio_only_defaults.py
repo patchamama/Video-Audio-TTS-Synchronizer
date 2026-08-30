@@ -18,6 +18,8 @@ from create_video_tts_from_srt import (
     is_rate_optimization_enabled,
     plain_document_lines,
     generate_plain_document_audio,
+    generate_api_audio,
+    is_paid_tts_quota_error,
     resolve_video_path,
 )
 
@@ -88,6 +90,45 @@ def test_plain_document_audio_uses_fixed_rate_and_generated_cues():
     finally:
         os.chdir(original_cwd)
         module.generate_api_audio = original
+
+
+def test_audio_generation_reuses_fragments_and_falls_back_after_paid_quota():
+    import create_video_tts_from_srt as module
+    original_engine = module.TTSEngine
+    original_fallback = module.get_free_tts_fallback
+    original_duration = module.get_audio_duration
+    original_concat = module._concat_wav_files
+    class FakeEngine:
+        def __init__(self, language='es', tts_method=None, tts_voice=None):
+            self.method, self.last_error, self.calls = tts_method, None, 0
+        def generate_audio(self, _text, _rate, output):
+            self.calls += 1
+            if self.method == 'elevenlabs' and self.calls == 2:
+                self.last_error = 'quota_exceeded'
+                return False
+            output.write_bytes(b'audio')
+            return True
+        def get_tts_name(self): return self.method
+    try:
+        module.TTSEngine = FakeEngine
+        module.get_free_tts_fallback = lambda *_args, **_kwargs: FakeEngine(tts_method='say')
+        module.get_audio_duration = lambda path: 1.0 if path.exists() else 0.0
+        module._concat_wav_files = lambda _parts, output, **_kwargs: output.write_bytes(b'joined')
+        with TemporaryDirectory() as directory:
+            messages = []
+            payload = {'text': 'uno\ndos\ntres', 'lang': 'es', 'tts': 'elevenlabs', 'rate': 200, 'fixed_rate': True, '_progress': messages.append}
+            _audio, metadata = generate_api_audio(payload, Path(directory))
+            assert is_paid_tts_quota_error('quota_exceeded')
+            assert metadata['tts_used'] == 'elevenlabs → say'
+            assert any('cuota de ElevenLabs agotada' in message for message in messages)
+            messages.clear()
+            generate_api_audio(payload, Path(directory))
+            assert sum('reutilizando fragmento' in message for message in messages) == 3
+    finally:
+        module.TTSEngine = original_engine
+        module.get_free_tts_fallback = original_fallback
+        module.get_audio_duration = original_duration
+        module._concat_wav_files = original_concat
 
 
 def test_no_truncate_mode_uses_max_rate_until_it_recovers_sync():

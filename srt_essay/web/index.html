@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SRT Essay</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/styles/github-dark.min.css">
+</head>
+<body>
+  <main>
+    <header><p class="eyebrow">MODELOS LOCALES Y API · PROSA FIEL</p><h1>SRT Essay</h1><p>Transformá subtítulos fragmentados en Markdown claro, sin cambiar sus ideas.</p></header>
+    <form id="form">
+      <label class="upload">Archivo de entrada (.srt, .md o .txt)<input id="source" type="file" accept=".srt,.md,.txt"><strong id="file-name">Elegí un archivo o usá la lista local.</strong></label>
+      <label>Archivo existente en el proyecto<select id="local-source"><option value="">Cargando archivos disponibles…</option></select></label>
+      <small id="local-source-path" class="local-path" hidden>—</small>
+      <a id="local-source-link" class="local-link" hidden target="_blank" rel="noopener">Abrir ruta local</a>
+      <div class="grid">
+        <label>Proveedor<select id="provider"><option value="ollama">Ollama (local)</option><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option></select><small id="provider-status"></small></label>
+        <label>Modelo<select id="model" required disabled><option>Cargando modelos…</option></select></label>
+        <label id="ollama-url-field">URL de Ollama<input id="ollama-url" value="http://localhost:11434" type="url"></label>
+        <label>Modo<select id="mode"><option value="quality">Calidad · dos pasadas</option><option value="fast">Rápido · una pasada</option></select></label>
+        <label>Bloque máximo<input id="chunk-size" type="number" min="500" value="3500"></label>
+      </div>
+      <label>Prompt a utilizar<select id="prompt-profile" required><option>Cargando perfiles…</option></select></label>
+      <details class="prompt-editor"><summary>Editar prompts del modelo</summary>
+        <p>En modo Debug se guarda el prompt final de cada bloque para auditarlo.</p>
+        <label>Nombre del perfil<input id="prompt-label" value="Corrección fiel del original"></label>
+        <button id="new-prompt-profile" type="button">Nuevo perfil desde este prompt</button>
+        <label>Prompt de sistema<textarea id="rewrite-system-prompt" rows="3">Sos un corrector de estilo, no un autor. La fidelidad es obligatoria.</textarea></label>
+        <label>Instrucciones de redacción<textarea id="rewrite-instructions" rows="8">Devolvé exclusivamente Markdown en párrafos. Conservá TODO el significado, los hechos, la incertidumbre y el idioma original. No agregues, elimines, resumas ni interpretes ideas. Podés corregir ortografía, puntuación, fluidez, y unir o separar párrafos cuando sea necesario. Corregí incoherencias accidentales de género, número y persona gramatical cuando el referente sea inequívoco en el contexto (por ejemplo, interlocutoras mujeres referidas erróneamente en masculino). No fuerces una corrección si el referente es ambiguo. No uses títulos, listas ni comentarios editoriales salvo que ya existan en el texto fuente.</textarea></label>
+        <label>Instrucciones para la guía de continuidad<textarea id="guide-instructions" rows="4">Redactá una guía factual, breve y acumulativa de temas, entidades y transición. No agregues datos ni conclusiones que no aparezcan en el texto fuente.</textarea></label>
+        <button id="save-prompts" type="button">Guardar prompts en backend</button><small id="prompt-status"></small>
+        <label>Texto de prueba<textarea id="prompt-test-text" rows="5" placeholder="Pegá un fragmento breve para probar el prompt y el modelo seleccionado."></textarea></label>
+        <button id="test-prompt" type="button">Test</button><small id="prompt-test-status"></small>
+        <article id="prompt-test-result" class="markdown-body" hidden></article>
+      </details>
+      <details class="audio-options">
+        <summary>Generar audio de salida</summary>
+        <label class="debug-option"><input id="generate-audio" type="checkbox"> Generar un audio WAV al terminar</label>
+        <div class="grid">
+          <label>Fuente del audio<select id="audio-source"><option value="markdown">Markdown corregido</option><option value="input">Texto limpio de entrada</option></select></label>
+          <label>Idioma<select id="audio-lang"><option value="es">Español</option></select></label>
+          <label>Motor TTS<select id="audio-tts"><option value="">Cargando motores…</option></select><small id="tts-status"></small></label>
+          <div class="voice-control"><label>Voz<select id="audio-voice"><option value="">Voz predeterminada</option></select></label><button id="test-voice" type="button">Test</button></div>
+          <label>Velocidad (WPM)<input id="audio-rate" type="number" min="80" max="500" step="10" value="200"></label>
+          <label>Pausa entre párrafos (ms)<input id="audio-pause" type="number" min="0" step="100" value="500"></label>
+          <label>Fragmentos por lote<input id="audio-merge-batch-size" type="number" min="1" max="500" step="1" value="50"></label>
+          <label>Modo test · primeros N fragmentos<input id="audio-test-fragments" type="number" min="0" step="1" value="0"><small>Usá 0 para procesar todo el texto.</small></label>
+        </div>
+        <label class="debug-option"><input id="audio-split-chapters" type="checkbox"> Separar capítulos de salida por encabezados Markdown H1 y H2</label>
+        <button id="generate-input-audio" type="button">Generar audio desde el archivo de entrada</button>
+        <small>Este botón limpia y narra el archivo directamente; no usa Ollama ni modifica el Markdown.</small>
+        <div class="cache-actions"><div><button id="check-audio-cache" type="button">Check caché</button> <button id="delete-audio-cache" type="button" class="danger">Eliminar caché</button></div><small id="audio-cache-status" hidden></small></div>
+        <section id="voice-test-result" class="voice-test-result" hidden><small id="voice-test-text"></small><audio id="voice-test-player" controls></audio></section>
+      </details>
+      <label class="debug-option"><input id="debug" type="checkbox"> Modo Debug: guardar archivos intermedios y prompts</label>
+      <button id="submit" disabled>Generar Markdown</button>
+    </form>
+      <section id="status" hidden>
+      <div class="progress-heading"><strong id="state">Preparando…</strong><span id="percent">0%</span></div>
+      <progress id="progress" value="0" max="100"></progress>
+      <pre id="logs" aria-live="polite"></pre>
+      <button id="resume-audio" type="button" hidden>Reanudar audio desde caché</button>
+      <details id="debug-panel" class="debug-panel" hidden><summary>Archivos intermedios</summary><ul id="artifacts"></ul></details>
+      <details id="comparison-panel" class="comparison-panel" hidden><summary>Comparar texto enviado y corregido</summary><div id="comparisons"></div></details>
+      <section class="preview-panel" aria-live="polite">
+        <header><strong>Vista previa Markdown</strong><span>Se actualiza al terminar cada bloque</span></header>
+        <article id="markdown-preview" class="markdown-body"><p>El resultado aparecerá aquí.</p></article>
+      </section>
+      <a id="download" hidden>Descargar Markdown</a>
+      <section id="audio-result" class="audio-result" hidden><strong>Audios generados</strong><div id="audio-list"></div></section>
+      <section id="workspace-panel" class="workspace-panel" hidden><strong>Carpeta del trabajo generado</strong><code id="workspace-path"></code><a id="workspace-link" target="_blank">Abrir mediante enlace local</a><button id="open-workspace" type="button">Abrir en Finder</button><small>La salida final, audios y Debug se conservan en <code>trabajos-generados/</code>.</small></section>
+    </section>
+  </main>
+  <script src="https://cdn.jsdelivr.net/npm/marked@16.0.0/lib/marked.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.14/dist/purify.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.11.1/lib/common.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/diff@9.0.0/dist/diff.min.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
