@@ -159,6 +159,8 @@ Para generar solo el audio podés omitir el video:
 
 ```bash
 python3 create_video_tts_from_srt.py mi_video.srt
+# O usar el atajo que configura sólo-audio y sin truncado:
+./srt_to_audio_creator.sh mi_video.srt --lang es
 ```
 
 Es equivalente a `python3 create_video_tts_from_srt.py mi_video.srt mi_video.mp4 --solo-audio --no-truncate`; usa `mi_video.mp4` solo como base para nombrar los audios de salida, por lo que no necesita existir.
@@ -1271,7 +1273,7 @@ wget https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/m
 ---
 
 **Última actualización:** 2026-08-28
-**Versión:** 2.37.0 (Python rewrite)
+**Versión:** 2.38.0 (Python rewrite)
 
 La versión se incrementa en cada actualización publicada siguiendo [Semantic Versioning](https://semver.org/lang/es/).
 
