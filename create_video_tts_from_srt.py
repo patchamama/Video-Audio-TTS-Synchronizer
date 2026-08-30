@@ -111,15 +111,15 @@ import threading
 import mimetypes
 from urllib.parse import parse_qs, quote, urlparse
 from urllib.request import Request, urlopen
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 import shutil
 import zipfile
 
 # Incrementar en cada actualización publicada (SemVer).
-APP_VERSION = "2.29.0"
+APP_VERSION = "2.30.0"
 
 NOTES_FILE = Path(__file__).resolve().parent / 'notas.txt'
 
@@ -354,6 +354,90 @@ LANGUAGE_NAMES = {
     'ko': '한국어', 'nl': 'Nederlands', 'pt': 'Português', 'sv': 'Svenska',
     'zh': '中文',
 }
+EUROPEAN_LANGUAGE_CODES = ('de', 'en', 'es', 'fi', 'fr', 'it', 'nl', 'pt', 'sv')
+ELEVENLABS_CONFIG_FILENAME = '.srt-essay-secrets.json'
+_ELEVENLABS_CACHE_TTL_SECONDS = 60
+_elevenlabs_voices_cache: tuple[float, List[dict]] | None = None
+_elevenlabs_credits_cache: tuple[float, dict] | None = None
+
+
+def get_elevenlabs_config() -> Optional[dict]:
+    """Obtiene el secreto local o variable de entorno sin exponerlo al frontend."""
+    api_key = os.getenv('ELEVENLABS_API_KEY', '').strip()
+    model_id = os.getenv('ELEVENLABS_MODEL_ID', '').strip() or 'eleven_multilingual_v2'
+    if not api_key:
+        config_path = Path.cwd() / ELEVENLABS_CONFIG_FILENAME
+        try:
+            config = json.loads(config_path.read_text(encoding='utf-8'))
+            elevenlabs = config.get('elevenlabs', {}) if isinstance(config, dict) else {}
+            api_key = str(elevenlabs.get('api_key', '')).strip()
+            model_id = str(elevenlabs.get('model_id', '')).strip() or model_id
+        except (OSError, json.JSONDecodeError):
+            pass
+    return {'api_key': api_key, 'model_id': model_id} if api_key else None
+
+
+def _elevenlabs_request(path: str, api_key: str, payload: Optional[dict] = None, timeout: int = 15) -> bytes:
+    data = json.dumps(payload).encode('utf-8') if payload is not None else None
+    request = Request(
+        f'https://api.elevenlabs.io/v1/{path.lstrip("/")}', data=data,
+        headers={'xi-api-key': api_key, 'Content-Type': 'application/json'}, method='POST' if data else 'GET',
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            return response.read()
+    except HTTPError as exc:
+        detail = exc.read().decode('utf-8', errors='replace')[:500]
+        raise ValueError(f'ElevenLabs respondió HTTP {exc.code}: {detail}') from exc
+    except URLError as exc:
+        raise ValueError(f'No se pudo conectar con ElevenLabs: {exc.reason}') from exc
+
+
+def get_elevenlabs_voices() -> List[dict]:
+    global _elevenlabs_voices_cache
+    if _elevenlabs_voices_cache and time.time() - _elevenlabs_voices_cache[0] < _ELEVENLABS_CACHE_TTL_SECONDS:
+        return _elevenlabs_voices_cache[1]
+    config = get_elevenlabs_config()
+    if not config:
+        return []
+    try:
+        payload = json.loads(_elevenlabs_request('voices', config['api_key']).decode('utf-8'))
+    except (ValueError, json.JSONDecodeError):
+        return []
+    voices = payload.get('voices', []) if isinstance(payload, dict) else []
+    result = []
+    for item in voices:
+        if not isinstance(item, dict) or not isinstance(item.get('voice_id'), str):
+            continue
+        labels = item.get('labels') or {}
+        declared_language = str(labels.get('language', '')).lower().strip()
+        languages = [declared_language] if declared_language in EUROPEAN_LANGUAGE_CODES else []
+        result.append({
+            'id': item['voice_id'], 'name': item.get('name') or item['voice_id'], 'labels': labels,
+            'languages': languages, 'category': item.get('category') or '',
+            'available_for_tiers': item.get('available_for_tiers') or [],
+        })
+    _elevenlabs_voices_cache = (time.time(), result)
+    return result
+
+
+def get_elevenlabs_credits() -> dict:
+    """Obtiene créditos sin propagar errores de permisos al listado de TTS."""
+    global _elevenlabs_credits_cache
+    if _elevenlabs_credits_cache and time.time() - _elevenlabs_credits_cache[0] < _ELEVENLABS_CACHE_TTL_SECONDS:
+        return _elevenlabs_credits_cache[1]
+    config = get_elevenlabs_config()
+    if not config:
+        return {'available': False, 'error': 'ElevenLabs no está configurado.'}
+    try:
+        subscription = json.loads(_elevenlabs_request('user/subscription', config['api_key']).decode('utf-8'))
+        used, limit = int(subscription.get('character_count', 0)), int(subscription.get('character_limit', 0))
+        result = {'available': True, 'used': used, 'limit': limit, 'remaining': max(0, limit - used),
+                  'tier': subscription.get('tier'), 'reset_unix': subscription.get('next_character_count_reset_unix')}
+    except (ValueError, json.JSONDecodeError) as exc:
+        result = {'available': False, 'error': str(exc)}
+    _elevenlabs_credits_cache = (time.time(), result)
+    return result
 
 
 def get_say_voices() -> List[dict]:
@@ -393,6 +477,12 @@ def get_available_tts() -> List[dict]:
     if shutil.which('espeak-ng'):
         engines.append({'id': 'espeak-ng', 'label': 'eSpeak NG', 'offline': True,
                         'languages': sorted({'es', 'en', 'de', 'fr', 'it', 'pt', 'ja', 'zh'})})
+    config = get_elevenlabs_config()
+    engines.append({
+        'id': 'elevenlabs', 'label': 'ElevenLabs' if config else 'ElevenLabs · requiere API key',
+        'offline': False, 'configured': bool(config), 'languages': list(EUROPEAN_LANGUAGE_CODES),
+        'voices': get_elevenlabs_voices() if config else [], 'credits': get_elevenlabs_credits(),
+    })
     return engines
 
 
@@ -408,12 +498,13 @@ class TTSEngine:
         if tts_method and tts_method not in available_ids:
             raise ValueError(f"TTS no instalado o no soportado: {tts_method}")
         selected_methods = {'say': 'say', 'edge-tts': 'edge-tts', 'sapi': 'sapi',
-                            'gtts': 'linux', 'espeak-ng': 'espeak-ng'}
+                            'gtts': 'linux', 'espeak-ng': 'espeak-ng', 'elevenlabs': 'elevenlabs'}
         self.method = selected_methods.get(tts_method) if tts_method else self._detect_method()
         self.gtts_consecutive_failures = 0
         self.gtts_permanently_disabled = False
         self.using_fallback = False
         self.last_tts_used = None  # Rastrear el TTS realmente usado
+        self.last_error = None
         self._configure_voice()  # Configurar voz según idioma
 
     def _configure_voice(self):
@@ -456,6 +547,8 @@ class TTSEngine:
         supported_languages = set(self.voice_config['espeak'])
         if self.method == 'say':
             supported_languages.update(voice['language'] for voice in get_say_voices())
+        elif self.method == 'elevenlabs':
+            supported_languages.update(EUROPEAN_LANGUAGE_CODES)
         if self.language not in supported_languages:
             print(f"{Colors.YELLOW}⚠️  Idioma '{self.language}' no soportado, usando 'es' por defecto{Colors.NC}")
             self.language = 'es'
@@ -474,6 +567,16 @@ class TTSEngine:
             voice = voice or next((item['name'] for item in installed_voices if item['language'] == self.language), 'Paulina')
             self.say_voice = voice
             print(f"{Colors.CYAN}  🎙️  Voz seleccionada: {voice} ({self.language}){Colors.NC}")
+        elif self.method == 'elevenlabs':
+            voices = get_elevenlabs_voices()
+            selected = next((voice for voice in voices if voice['id'] == self.requested_voice), None) if self.requested_voice else None
+            if self.requested_voice and not selected:
+                raise ValueError(f"Voz de ElevenLabs no disponible: {self.requested_voice}")
+            selected = selected or (voices[0] if voices else None)
+            if not selected:
+                raise ValueError('ElevenLabs no devolvió voces. Revisá la API key y la conexión.')
+            self.elevenlabs_voice = selected['id']
+            print(f"{Colors.CYAN}  🎙️  Voz seleccionada: {selected['name']} (ElevenLabs){Colors.NC}")
         elif self.requested_voice:
             raise ValueError(f"El TTS '{self.requested_tts or self.method}' no expone voces seleccionables")
         elif self.method in {"windows", "edge-tts"}:
@@ -495,6 +598,8 @@ class TTSEngine:
             return "sapi"
         elif self.method == "espeak-ng":
             return "espeak-ng"
+        elif self.method == "elevenlabs":
+            return "elevenlabs"
         elif self.method == "windows":
             return "edge-tts"
         elif self.method == "linux":
@@ -663,6 +768,33 @@ class TTSEngine:
         except Exception as e:
             return False
 
+    def _generate_with_elevenlabs(self, text: str, rate: int, output_file: Path) -> bool:
+        """Genera MP3 con ElevenLabs y lo normaliza a WAV para la unión local."""
+        config = get_elevenlabs_config()
+        if not config:
+            return False
+        try:
+            speed = min(1.2, max(0.7, rate / 200))
+            audio = _elevenlabs_request(
+                f"text-to-speech/{self.elevenlabs_voice}?output_format=mp3_44100_128", config['api_key'],
+                {'text': text, 'model_id': config['model_id'], 'voice_settings': {'speed': speed}},
+                timeout=90,
+            )
+            mp3_file = output_file.with_suffix('.mp3')
+            mp3_file.write_bytes(audio)
+            subprocess.run(['ffmpeg', '-i', str(mp3_file), str(output_file), '-y'], check=True,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            mp3_file.unlink(missing_ok=True)
+            self.last_tts_used = 'elevenlabs'
+            return output_file.exists()
+        except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+            detail = str(exc)
+            self.last_error = (
+                'Esta voz de Voice Library requiere un plan pago de ElevenLabs para usarse por API.'
+                if 'paid_plan_required' in detail else detail
+            )
+            return False
+
     def generate_audio(self, text: str, rate: int, output_file: Path) -> bool:
         """Genera audio TTS con el rate especificado"""
         try:
@@ -674,6 +806,9 @@ class TTSEngine:
 
             if self.method == "sapi":
                 return self._generate_with_sapi(text, rate, output_file)
+
+            if self.method == "elevenlabs":
+                return self._generate_with_elevenlabs(text, rate, output_file)
 
             if self.method == "say":
                 # macOS say command con voz configurada según idioma
@@ -1668,25 +1803,47 @@ def process_youtube_video(youtube_input: str, target_lang: Optional[str] = None)
 API_RATE_CANDIDATES = (180, 200, 220, 240)
 
 
-def _concat_wav_files(parts: List[Path], output: Path) -> None:
-    """Concatena WAVs locales sin depender de timestamps de subtítulos."""
-    if not parts:
-        raise ValueError('No hay texto para sintetizar')
-    current = parts[0]
-    temporary_files = []
-    for index, part in enumerate(parts[1:], 1):
-        target = output.parent / f'api_concat_{index}.wav'
+def _concat_wav_batch(parts: List[Path], output: Path) -> None:
+    """Une un lote de WAVs con el demuxer concat de ffmpeg."""
+    manifest = output.with_suffix('.txt')
+    manifest.write_text(
+        ''.join(f"file '{str(part.resolve()).replace("'", "'\\\\''")}'\n" for part in parts),
+        encoding='utf-8',
+    )
+    try:
         subprocess.run(
-            ['ffmpeg', '-i', str(current), '-i', str(part),
-             '-filter_complex', '[0:a][1:a]concat=n=2:v=0:a=1[out]',
-             '-map', '[out]', str(target), '-y'],
+            ['ffmpeg', '-f', 'concat', '-safe', '0', '-i', str(manifest),
+             '-c:a', 'pcm_s16le', str(output), '-y'],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True,
         )
-        if current not in parts:
-            temporary_files.append(current)
-        current = target
-    shutil.copy(current, output)
-    for temporary in temporary_files:
+    finally:
+        manifest.unlink(missing_ok=True)
+
+
+def _concat_wav_files(fragment_parts: List[List[Path]], output: Path, batch_size: int = 50,
+                      progress: Optional[Callable[[str], None]] = None) -> None:
+    """Concatena fragmentos por lotes para informar avance sin concatenación O(n²)."""
+    if not fragment_parts:
+        raise ValueError('No hay texto para sintetizar')
+    if batch_size < 1:
+        raise ValueError('El tamaño de lote debe ser mayor que cero')
+    report = progress or (lambda _message: None)
+    batches = [fragment_parts[index:index + batch_size] for index in range(0, len(fragment_parts), batch_size)]
+    batch_outputs = []
+    for index, batch in enumerate(batches, 1):
+        first = (index - 1) * batch_size + 1
+        last = first + len(batch) - 1
+        report(f"TTS: uniendo lote {index}/{len(batches)} (fragmentos {first}-{last}).")
+        batch_output = output.parent / f'batch-{index:04d}.wav'
+        _concat_wav_batch([part for fragment in batch for part in fragment], batch_output)
+        batch_outputs.append(batch_output)
+        report(f"TTS: lote {index}/{len(batches)} unido.")
+    if len(batch_outputs) == 1:
+        shutil.copy(batch_outputs[0], output)
+    else:
+        report(f"TTS: uniendo {len(batch_outputs)} lotes para crear la pista final.")
+        _concat_wav_batch(batch_outputs, output)
+    for temporary in batch_outputs:
         temporary.unlink(missing_ok=True)
 
 
@@ -1708,7 +1865,18 @@ def _api_text_lines(payload: dict, directory: Path) -> Tuple[List[str], str]:
 
 def generate_api_audio(payload: dict, directory: Path) -> Tuple[Path, dict]:
     """Genera una respuesta de audio autocontenida para la API HTTP local."""
+    report_progress = payload.get('_progress')
+    if not callable(report_progress):
+        report_progress = lambda _message: None
     lines, source_type = _api_text_lines(payload, directory)
+    max_fragments = payload.get('max_fragments')
+    if max_fragments not in (None, ''):
+        max_fragments = int(max_fragments)
+        if max_fragments < 1:
+            raise ValueError('max_fragments debe ser mayor que cero')
+        if max_fragments < len(lines):
+            report_progress(f"TTS: modo test activo; se procesarán los primeros {max_fragments}/{len(lines)} fragmentos.")
+            lines = lines[:max_fragments]
     language = str(payload.get('lang') or payload.get('language') or 'es')
     pause_ms = max(0, int(payload.get('pause_ms', 0) or 0))
     target_duration = payload.get('duration')
@@ -1720,28 +1888,50 @@ def generate_api_audio(payload: dict, directory: Path) -> Tuple[Path, dict]:
     rates = [requested_rate] if fixed_rate or target_duration is None else list(API_RATE_CANDIDATES)
     requested_tts = payload.get('tts') or payload.get('tts_method')
     requested_voice = payload.get('voice') or payload.get('tts_voice')
+    batch_size = int(payload.get('merge_batch_size', 50) or 50)
+    if batch_size < 1:
+        raise ValueError('merge_batch_size debe ser mayor que cero')
+    report_progress(f"TTS: preparando {len(lines)} fragmentos con {requested_tts or 'motor automático'}.")
     engine = TTSEngine(language=language, tts_method=requested_tts, tts_voice=requested_voice)
     candidates = []
     for rate in dict.fromkeys(rates):
         rate_dir = directory / f'rate_{rate}'
         rate_dir.mkdir()
-        parts = []
+        fragment_parts = []
         for index, line in enumerate(lines):
+            report_progress(f"TTS: generando fragmento {index + 1}/{len(lines)} a {rate} wpm.")
             audio_file = rate_dir / f'{index}.wav'
             if not engine.generate_audio(re.sub(r'<[^>]*>', '', line), rate, audio_file):
-                raise RuntimeError(f'No se pudo generar audio a {rate} wpm')
-            parts.append(audio_file)
+                detail = f': {engine.last_error}' if engine.last_error else ''
+                raise RuntimeError(f'No se pudo generar audio a {rate} wpm{detail}')
+            if get_audio_duration(audio_file) <= 0:
+                raise RuntimeError(f'ElevenLabs o el TTS devolvió un audio vacío a {rate} wpm')
+            parts = [audio_file]
+            report_progress(f"TTS: fragmento {index + 1}/{len(lines)} generado.")
             if pause_ms and index + 1 < len(lines):
                 silence = rate_dir / f'pause_{index}.wav'
                 create_silence(pause_ms / 1000.0, silence)
                 parts.append(silence)
+                report_progress(f"TTS: pausa de {pause_ms} ms agregada tras el fragmento {index + 1}.")
+            fragment_parts.append(parts)
         output = rate_dir / 'combined.wav'
-        _concat_wav_files(parts, output)
+        _concat_wav_files(fragment_parts, output, batch_size=batch_size, progress=report_progress)
         duration = get_audio_duration(output)
         candidates.append((abs(duration - target_duration) if target_duration is not None else 0, rate, duration, output))
     _, rate, duration, selected = min(candidates, key=lambda candidate: candidate[0])
-    final_audio = directory / 'generated_audio.wav'
-    shutil.copy(selected, final_audio)
+    output_format = str(payload.get('output_format') or 'wav').lower()
+    if output_format not in {'wav', 'mp3'}:
+        raise ValueError('output_format debe ser wav o mp3')
+    final_audio = directory / f'generated_audio.{output_format}'
+    if output_format == 'mp3':
+        report_progress("TTS: codificando la pista final a MP3.")
+        subprocess.run(
+            ['ffmpeg', '-i', str(selected), '-c:a', 'libmp3lame', '-b:a', '192k', str(final_audio), '-y'],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True,
+        )
+    else:
+        shutil.copy(selected, final_audio)
+    report_progress(f"TTS: archivo {output_format.upper()} final preparado ({duration:.1f} s).")
     cursor, cues = 0.0, []
     for index, line in enumerate(lines, 1):
         # La duración por cue se obtiene de la generación seleccionada, no del SRT fuente.
@@ -1753,9 +1943,74 @@ def generate_api_audio(payload: dict, directory: Path) -> Tuple[Path, dict]:
         'language': language, 'rate': rate, 'duration': duration,
         'target_duration': target_duration, 'fixed_rate': fixed_rate,
         'pause_ms': pause_ms, 'source_type': source_type, 'cues': cues,
+        'fragment_count': len(lines), 'merge_batch_size': batch_size,
+        'output_format': output_format,
         'tts_requested': requested_tts, 'tts_used': engine.get_tts_name(),
         'voice_requested': requested_voice, 'voice_used': getattr(engine, 'say_voice', None),
     }
+
+
+PLAIN_DOCUMENT_EXTENSIONS = {'.txt', '.md', '.markdown'}
+
+
+def plain_document_lines(path: Path) -> List[str]:
+    """Lee texto o Markdown en fragmentos narrables, sin timestamps de entrada."""
+    content = path.read_text(encoding='utf-8-sig')
+    lines = []
+    in_code_block = False
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if line.startswith('```'):
+            in_code_block = not in_code_block
+            continue
+        if in_code_block or not line or line in {'---', '***', '___'}:
+            continue
+        if path.suffix.lower() in {'.md', '.markdown'}:
+            line = re.sub(r'!?\[([^\]]*)\]\([^)]*\)', r'\1', line)
+            line = re.sub(r'^[>#\-*+]+\s*', '', line)
+            line = re.sub(r'`([^`]+)`', r'\1', line)
+            line = line.replace('**', '').replace('__', '').replace('*', '').replace('_', '')
+        line = re.sub(r'\s+', ' ', line).strip()
+        if line:
+            lines.append(line)
+    if not lines:
+        raise ValueError('El archivo no contiene texto narrable')
+    return lines
+
+
+def generate_plain_document_audio(document_path: Path, args) -> dict:
+    """Genera audio continuo y un SRT nuevo desde TXT/Markdown, ignorando tiempos externos."""
+    lines = plain_document_lines(document_path)
+    if args.test:
+        lines = lines[:args.test]
+    rate = args.fix_rate_not_truncate if args.fix_rate_not_truncate is not None else 200
+    pause_ms = args.fix_rate_not_truncate_pause
+    directory = Path.cwd() / f"temp_{document_path.stem}_plain_{uuid.uuid4().hex[:8]}"
+    directory.mkdir(parents=True, exist_ok=False)
+    audio, metadata = generate_api_audio({
+        'text': '\n'.join(lines),
+        'lang': args.lang or 'es',
+        'tts': args.tts,
+        'voice': args.voice,
+        'rate': rate,
+        'fixed_rate': True,
+        'pause_ms': pause_ms,
+    }, directory)
+    stem = document_path.with_suffix('').with_name(f"{document_path.stem}_plain_rate_{rate}")
+    output_wav = stem.with_name(f"{stem.name}_audio.wav")
+    output_mp3 = stem.with_name(f"{stem.name}_audio.mp3")
+    output_aac = stem.with_name(f"{stem.name}_audio.aac")
+    output_srt = stem.with_suffix('.srt')
+    shutil.copy(audio, output_wav)
+    for codec, output in (('aac', output_aac), ('libmp3lame', output_mp3)):
+        try:
+            subprocess.run(['ffmpeg', '-i', str(output_wav), '-c:a', codec, '-b:a', '192k', str(output), '-y'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            pass
+    with output_srt.open('w', encoding='utf-8') as output:
+        for cue in metadata['cues']:
+            output.write(f"{cue['id']}\n{SRTParser.seconds_to_srt_time(cue['start'])} --> {SRTParser.seconds_to_srt_time(cue['end'])}\n{cue['text']}\n\n")
+    return {'wav': output_wav, 'mp3': output_mp3, 'aac': output_aac, 'srt': output_srt, 'metadata': metadata}
 
 
 def main():
@@ -1763,7 +2018,7 @@ def main():
         description="Genera audio TTS sincronizado con video desde archivo SRT",
         add_help=False  # Manejamos --help manualmente
     )
-    parser.add_argument("srt_file", nargs="?", help="Archivo de subtítulos SRT")
+    parser.add_argument("srt_file", nargs="?", help="Archivo SRT, Markdown (.md) o texto plano (.txt)")
     parser.add_argument("video", nargs="?", help="Archivo de video")
     parser.add_argument("audio_dir", nargs="?", help="Carpeta con audios ya generados")
     parser.add_argument("--test", type=int, nargs="?", const=30,
@@ -1808,6 +2063,27 @@ def main():
         return
     if args.web:
         start_web_ui()
+        return
+
+    document_path = Path(args.srt_file) if args.srt_file else None
+    if document_path and not args.help and document_path.suffix.lower() in PLAIN_DOCUMENT_EXTENSIONS:
+        if args.video:
+            parser.error("Los archivos Markdown o TXT generan solo audio y no aceptan video")
+        if args.fix_rate_not_truncate_pause < 0:
+            parser.error("--fix-rate-not-truncate-pause no puede ser negativo")
+        if not document_path.is_file():
+            parser.error(f"No existe el archivo: {document_path}")
+        try:
+            result = generate_plain_document_audio(document_path, args)
+        except (ValueError, RuntimeError, OSError) as error:
+            parser.error(str(error))
+        metadata = result['metadata']
+        print(f"{Colors.GREEN}✅ Audio plano generado desde {document_path.name}{Colors.NC}")
+        print(f"{Colors.CYAN}   Idioma: {metadata['language']} · TTS: {metadata['tts_used']} · Rate: {metadata['rate']} wpm · Duración: {metadata['duration']:.3f}s{Colors.NC}")
+        for kind in ('wav', 'mp3', 'aac', 'srt'):
+            output = result[kind]
+            if output.exists():
+                print(f"{Colors.GREEN}   {kind.upper()}: {output}{Colors.NC}")
         return
 
     # Si se especifica --continue, cargar checkpoint y reanudar

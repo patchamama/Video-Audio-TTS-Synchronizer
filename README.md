@@ -18,6 +18,8 @@ El formulario principal también permite elegir **TTS** y **Installed voice**; a
 
 Las opciones del frontend se conservan en el navegador mediante `localStorage`; el botón **Reset** elimina esas preferencias y restaura los valores predeterminados al recargar la página.
 
+También podés pasar directamente un archivo `.txt`, `.md` o `.markdown`: genera un audio continuo a 200 ppm por defecto (o el rate de `--fix-rate-not-truncate`), sin leer tiempos de subtítulos y con un SRT nuevo calculado a partir de la duración real del audio. Ejemplo: `python3 create_video_tts_from_srt.py capitulo.md --lang es --tts say --voice 'Diego (Enhanced)'`.
+
 ## 📋 Tabla de Contenidos
 
 - [Descripción](#-descripción)
@@ -1269,7 +1271,7 @@ wget https://raw.githubusercontent.com/patchamama/Video-Audio-TTS-Synchronizer/m
 ---
 
 **Última actualización:** 2026-08-28
-**Versión:** 2.29.0 (Python rewrite)
+**Versión:** 2.30.0 (Python rewrite)
 
 La versión se incrementa en cada actualización publicada siguiendo [Semantic Versioning](https://semver.org/lang/es/).
 

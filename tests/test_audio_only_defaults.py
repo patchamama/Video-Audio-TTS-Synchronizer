@@ -1,4 +1,5 @@
 from argparse import Namespace
+import os
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
@@ -15,6 +16,8 @@ from create_video_tts_from_srt import (
     create_fixed_rate_not_truncate_srt,
     get_no_truncate_rate_list,
     is_rate_optimization_enabled,
+    plain_document_lines,
+    generate_plain_document_audio,
     resolve_video_path,
 )
 
@@ -46,6 +49,45 @@ def test_audio_only_accepts_a_missing_video_as_an_output_name_base():
 
 def test_video_processing_rejects_a_missing_video():
     assert resolve_video_path("media/video.mp4") is None
+
+
+def test_plain_document_lines_strip_markdown_without_timestamps():
+    with TemporaryDirectory() as directory:
+        document = Path(directory) / 'chapter.md'
+        document.write_text('# Title\n\n- **Hello** [world](https://example.test)!\n\n```\nignored\n```\n', encoding='utf-8')
+
+        assert plain_document_lines(document) == ['Title', 'Hello world!']
+
+
+def test_plain_document_audio_uses_fixed_rate_and_generated_cues():
+    import create_video_tts_from_srt as module
+    original = module.generate_api_audio
+    original_cwd = Path.cwd()
+    captured = {}
+    try:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            document = root / 'chapter.txt'
+            document.write_text('First sentence.\nSecond sentence.', encoding='utf-8')
+            def fake_generate(payload, output_directory):
+                captured.update(payload)
+                audio = output_directory / 'generated_audio.wav'
+                audio.write_bytes(b'fake wav')
+                return audio, {'rate': payload['rate'], 'language': payload['lang'], 'tts_used': 'fake', 'duration': 2.0, 'cues': [
+                    {'id': 1, 'start': 0.0, 'end': 1.0, 'text': 'First sentence.'},
+                    {'id': 2, 'start': 1.0, 'end': 2.0, 'text': 'Second sentence.'},
+                ]}
+            module.generate_api_audio = fake_generate
+            os.chdir(root)
+            result = generate_plain_document_audio(document, Namespace(test=None, fix_rate_not_truncate=None, fix_rate_not_truncate_pause=1000, lang='en', tts='say', voice='Samantha'))
+            assert captured['fixed_rate'] is True
+            assert captured['rate'] == 200
+            assert captured['text'] == 'First sentence.\nSecond sentence.'
+            assert result['wav'].is_file()
+            assert '00:00:00,000 --> 00:00:01,000' in result['srt'].read_text(encoding='utf-8')
+    finally:
+        os.chdir(original_cwd)
+        module.generate_api_audio = original
 
 
 def test_no_truncate_mode_uses_max_rate_until_it_recovers_sync():
