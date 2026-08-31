@@ -35,6 +35,13 @@ def test_chunking_rejects_unsafe_tiny_limit():
         chunk_paragraphs(["texto"], 10)
 
 
+def test_horizontal_rule_at_section_start_is_not_mistaken_for_frontmatter():
+    source = "---\n\nPrimer párrafo.\n\n---\n\nSegundo párrafo."
+    assert parse_plain_document(source) == ["Primer párrafo.", "Segundo párrafo."]
+    frontmatter = "---\ntitle: Documento\n---\n\nTexto narrable."
+    assert parse_plain_document(frontmatter) == ["Texto narrable."]
+
+
 def test_markdown_horizontal_rules_are_not_sent_to_tts_or_translation():
     source = "## Título\n\n---\n\nTexto narrable. --- Más texto.\n\n***\n\nÚltimo párrafo."
     assert parse_plain_document(source) == ["Título", "Texto narrable. Más texto.", "Último párrafo."]
@@ -114,6 +121,16 @@ def test_input_audio_reuses_already_cleaned_text_without_reparsing():
 
     job = Job(id="job", name="entrada.md", cleaned_text="Texto ya validado.\n\n---\n\nContinuación.")
     assert JobStore._audio_source(job, "input") == "Texto ya validado.\n\n---\n\nContinuación."
+
+
+def test_audio_chapters_preserve_consecutive_markdown_headings(tmp_path):
+    from srt_essay.web_server import Job, JobStore
+
+    source = tmp_path / "entrada.md"
+    source.write_text("## Título general\n\n## Sesión uno\n\n---\n\nTexto para el audio.", encoding="utf-8")
+    job = Job(id="job", name=source.name)
+    chapters = JobStore._chapter_sources(job, "input", tmp_path)
+    assert chapters == [("Título general · Sesión uno", "Título general\n\nSesión uno\n\nTexto para el audio.")]
 
 
 def test_audio_chapters_skip_heading_sections_that_only_contain_markdown_rules(tmp_path):

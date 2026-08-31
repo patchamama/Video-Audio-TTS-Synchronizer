@@ -508,30 +508,40 @@ class JobStore:
         else:
             document = job.cleaned_text
         chapters: list[tuple[str, str]] = []
-        title = "Introducción"
+        headings: list[str] = []
         content: list[str] = []
 
-        def append_chapter() -> None:
+        def append_chapter() -> bool | None:
+            """Añade el capítulo; None conserva títulos sin cuerpo todavía."""
             body = "\n".join(content).strip()
             if not body:
-                return
+                return None
             try:
                 paragraphs = parse_plain_document(body)
             except SRTEssayError as error:
                 # Un título puede contener sólo una regla horizontal Markdown.
-                # No es un capítulo narrable y no debe abortar todo el trabajo.
                 if "no contiene texto legible" not in str(error):
                     raise
-                job.logs.append(f"Audio: se omitió el capítulo sin texto narrable: {title}.")
-                return
-            text = "\n\n".join([title, *paragraphs]).strip()
+                label = " · ".join(headings) or "Introducción"
+                job.logs.append(f"Audio: se omitió el capítulo sin texto narrable: {label}.")
+                return False
+            title = " · ".join(headings) or "Introducción"
+            # Narrá todos los encabezados consecutivos: suelen ser título y
+            # subtítulo, y antes el primero se perdía cuando no tenía cuerpo.
+            text = "\n\n".join([*headings, *paragraphs]).strip() if headings else "\n\n".join(paragraphs).strip()
             chapters.append((title, text))
+            return True
 
         for line in document.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
             header = re.match(r"^#{1,2}\s+(.+?)\s*#*\s*$", line)
             if header:
-                append_chapter()
-                title, content = header.group(1).strip(), []
+                result = append_chapter()
+                if result is not None:
+                    # Si había cuerpo —narrable o sólo un separador— la nueva
+                    # cabecera abre otra sección. Sólo los títulos consecutivos
+                    # sin cuerpo se conservan como título + subtítulo.
+                    headings, content = [], []
+                headings.append(header.group(1).strip())
             else:
                 content.append(line)
         append_chapter()

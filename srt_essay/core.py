@@ -288,7 +288,12 @@ def parse_plain_document(content: str) -> list[str]:
     content = content.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
     content = join_broken_prose_lines(content)
     # Frontmatter, enlaces y marcas de presentación no son parte de la prosa.
-    content = re.sub(r"\A---\s*\n.*?\n---\s*(?:\n|\Z)", "", content, flags=re.DOTALL)
+    # Una regla horizontal también usa `---`: sólo se considera frontmatter si
+    # contiene al menos una clave YAML, para no borrar el texto hasta la próxima
+    # regla horizontal del documento.
+    frontmatter = re.match(r"\A---[ \t]*\n(.*?)\n(?:---|\.\.\.)[ \t]*(?:\n|\Z)", content, flags=re.DOTALL)
+    if frontmatter and re.search(r"^[A-Za-z][A-Za-z0-9_-]*[ \t]*:", frontmatter.group(1), flags=re.MULTILINE):
+        content = content[frontmatter.end():]
     content = re.sub(r"!?(?:\[([^\]]*)\])\([^)]*\)", r"\1", content)
     # Los separadores horizontales son presentación Markdown, no texto narrable.
     content = re.sub(r"^[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*$", "", content, flags=re.MULTILINE)
