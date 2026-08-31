@@ -273,18 +273,19 @@ function renderAudioVoices() {
   });
   audioVoice.replaceChildren(new Option(voices.length ? 'Voz predeterminada' : 'No hay voces compatibles', ''), ...voiceOptions);
   if ([...audioVoice.options].some(option => option.value === previous)) audioVoice.value = previous;
-  const needsKey = engine?.id === 'elevenlabs' && !engine.configured;
-  const noCompatibleVoice = engine?.id === 'elevenlabs' && !voices.length;
+  const needsKey = ['elevenlabs', 'openai'].includes(engine?.id) && !engine.configured;
+  const noCompatibleVoice = ['elevenlabs', 'openai'].includes(engine?.id) && !voices.length;
   audioVoice.disabled = Boolean(noCompatibleVoice);
   testVoice.disabled = Boolean(needsKey || noCompatibleVoice);
   const statusMessages = [];
-  if (needsKey) statusMessages.push('Configurá ELEVENLABS_API_KEY o .srt-essay-secrets.json para cargar voces.');
+  if (needsKey) statusMessages.push(engine?.id === 'openai' ? 'Configurá OPENAI_API_KEY o openai.api_key en .srt-essay-secrets.json.' : 'Configurá ELEVENLABS_API_KEY o .srt-essay-secrets.json para cargar voces.');
   if (engine?.id === 'elevenlabs' && engine.credits?.available) {
     statusMessages.push(`Créditos: ${engine.credits.remaining.toLocaleString()} disponibles de ${engine.credits.limit.toLocaleString()} (${engine.credits.used.toLocaleString()} usados).`);
   } else if (engine?.id === 'elevenlabs' && engine.credits?.error) {
     statusMessages.push('Créditos no disponibles: agregá el permiso User read a la API key.');
   }
-  if (noCompatibleVoice) statusMessages.push(`No hay voces etiquetadas para ${window.languageNames?.[audioLang.value] || audioLang.value}.`);
+  if (engine?.id === 'openai' && engine.model) statusMessages.push(`Modelo: ${engine.model}.`);
+  if (noCompatibleVoice) statusMessages.push(`No hay voces compatibles para ${window.languageNames?.[audioLang.value] || audioLang.value}.`);
   ttsStatus.textContent = statusMessages.join(' ');
 }
 async function loadTts() {

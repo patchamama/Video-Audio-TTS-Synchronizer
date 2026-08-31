@@ -131,6 +131,21 @@ def test_audio_generation_reuses_fragments_and_falls_back_after_paid_quota():
         module._concat_wav_files = original_concat
 
 
+def test_openai_tts_generates_wav_with_selected_voice(monkeypatch):
+    import create_video_tts_from_srt as module
+
+    monkeypatch.setattr(module, "get_available_tts", lambda: [{"id": "openai", "languages": ["es"]}])
+    monkeypatch.setattr(module, "get_openai_tts_config", lambda: {"api_key": "test", "model": "gpt-4o-mini-tts"})
+    payload = {}
+    monkeypatch.setattr(module, "_openai_tts_request", lambda request, _key: payload.update(request) or b"RIFF" + b"\0" * 64)
+    with TemporaryDirectory() as directory:
+        output = Path(directory) / "openai.wav"
+        engine = module.TTSEngine(language="es", tts_method="openai", tts_voice="nova")
+        assert engine.generate_audio("Prueba.", 240, output)
+    assert payload["voice"] == "nova"
+    assert payload["speed"] == 1.2
+
+
 def test_no_truncate_mode_uses_max_rate_until_it_recovers_sync():
     lag = calculate_no_truncate_lag(0.0, audio_duration=4.0, available_time=3.0)
     assert lag == 1.0

@@ -486,9 +486,14 @@ class JobStore:
 
     @staticmethod
     def _audio_source(job: Job, source_kind: str) -> str:
-        source = job.markdown if source_kind == "markdown" else job.cleaned_text
-        paragraphs = parse_plain_document(source)
-        text = "\n\n".join(paragraphs).strip()
+        # `cleaned_text` ya pasó por input_paragraphs al crear el trabajo. No
+        # lo proceses por segunda vez: además de ser redundante, una limpieza
+        # posterior no debe poder convertir una entrada validada en texto vacío.
+        if source_kind == "input":
+            text = job.cleaned_text.strip()
+        else:
+            paragraphs = parse_plain_document(job.markdown)
+            text = "\n\n".join(paragraphs).strip()
         if not text:
             raise SRTEssayError("No hay texto disponible para generar el audio.")
         return text
@@ -510,7 +515,15 @@ class JobStore:
             body = "\n".join(content).strip()
             if not body:
                 return
-            paragraphs = parse_plain_document(body)
+            try:
+                paragraphs = parse_plain_document(body)
+            except SRTEssayError as error:
+                # Un título puede contener sólo una regla horizontal Markdown.
+                # No es un capítulo narrable y no debe abortar todo el trabajo.
+                if "no contiene texto legible" not in str(error):
+                    raise
+                job.logs.append(f"Audio: se omitió el capítulo sin texto narrable: {title}.")
+                return
             text = "\n\n".join([title, *paragraphs]).strip()
             chapters.append((title, text))
 

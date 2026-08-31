@@ -35,6 +35,11 @@ def test_chunking_rejects_unsafe_tiny_limit():
         chunk_paragraphs(["texto"], 10)
 
 
+def test_markdown_horizontal_rules_are_not_sent_to_tts_or_translation():
+    source = "## Título\n\n---\n\nTexto narrable. --- Más texto.\n\n***\n\nÚltimo párrafo."
+    assert parse_plain_document(source) == ["Título", "Texto narrable. Más texto.", "Último párrafo."]
+
+
 def test_broken_lowercase_lines_are_joined_before_translation_and_postprocessing():
     from srt_essay.core import postprocess_markdown
 
@@ -102,6 +107,24 @@ def test_audio_source_uses_clean_paragraphs_from_markdown_or_input():
     job = Job(id="job", name="entrada.txt", markdown="# Título\n\n**Texto** final.", cleaned_text="Entrada\n\nlimpia.")
     assert JobStore._audio_source(job, "markdown") == "Título\n\nTexto final."
     assert JobStore._audio_source(job, "input") == "Entrada\n\nlimpia."
+
+
+def test_input_audio_reuses_already_cleaned_text_without_reparsing():
+    from srt_essay.web_server import Job, JobStore
+
+    job = Job(id="job", name="entrada.md", cleaned_text="Texto ya validado.\n\n---\n\nContinuación.")
+    assert JobStore._audio_source(job, "input") == "Texto ya validado.\n\n---\n\nContinuación."
+
+
+def test_audio_chapters_skip_heading_sections_that_only_contain_markdown_rules(tmp_path):
+    from srt_essay.web_server import Job, JobStore
+
+    source = tmp_path / "entrada.md"
+    source.write_text("# Separador\n\n---\n\n## Capítulo narrable\n\nTexto para el audio.", encoding="utf-8")
+    job = Job(id="job", name=source.name, cleaned_text="Texto para el audio.")
+    chapters = JobStore._chapter_sources(job, "input", tmp_path)
+    assert chapters == [("Capítulo narrable", "Capítulo narrable\n\nTexto para el audio.")]
+    assert "se omitió el capítulo sin texto narrable: Separador." in job.logs
 
 
 def test_audio_only_job_cleans_input_without_ollama(tmp_path, monkeypatch):

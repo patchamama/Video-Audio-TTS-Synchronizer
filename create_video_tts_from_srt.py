@@ -119,7 +119,7 @@ import shutil
 import zipfile
 
 # Incrementar en cada actualización publicada (SemVer).
-APP_VERSION = "2.38.0"
+APP_VERSION = "2.43.0"
 
 NOTES_FILE = Path(__file__).resolve().parent / 'notas.txt'
 
@@ -359,6 +359,7 @@ ELEVENLABS_CONFIG_FILENAME = '.srt-essay-secrets.json'
 _ELEVENLABS_CACHE_TTL_SECONDS = 60
 _elevenlabs_voices_cache: tuple[float, List[dict]] | None = None
 _elevenlabs_credits_cache: tuple[float, dict] | None = None
+OPENAI_TTS_VOICES = ('alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'onyx', 'nova', 'sage', 'shimmer', 'verse', 'marin', 'cedar')
 
 
 def get_elevenlabs_config() -> Optional[dict]:
@@ -375,6 +376,36 @@ def get_elevenlabs_config() -> Optional[dict]:
         except (OSError, json.JSONDecodeError):
             pass
     return {'api_key': api_key, 'model_id': model_id} if api_key else None
+
+
+def get_openai_tts_config() -> Optional[dict]:
+    """Lee la clave y modelo TTS de OpenAI sin exponerlos al frontend."""
+    api_key = os.getenv('OPENAI_API_KEY', '').strip()
+    model = os.getenv('OPENAI_TTS_MODEL', '').strip() or 'gpt-4o-mini-tts'
+    if not api_key:
+        try:
+            config = json.loads((Path.cwd() / ELEVENLABS_CONFIG_FILENAME).read_text(encoding='utf-8'))
+            openai = config.get('openai', {}) if isinstance(config, dict) else {}
+            api_key = str(openai.get('api_key', '')).strip()
+            model = str(openai.get('tts_model', '')).strip() or model
+        except (OSError, json.JSONDecodeError):
+            pass
+    return {'api_key': api_key, 'model': model} if api_key else None
+
+
+def _openai_tts_request(payload: dict, api_key: str, timeout: int = 90) -> bytes:
+    request = Request(
+        'https://api.openai.com/v1/audio/speech', data=json.dumps(payload).encode('utf-8'),
+        headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}, method='POST',
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            return response.read()
+    except HTTPError as exc:
+        detail = exc.read().decode('utf-8', errors='replace')[:500]
+        raise ValueError(f'OpenAI respondió HTTP {exc.code}: {detail}') from exc
+    except URLError as exc:
+        raise ValueError(f'No se pudo conectar con OpenAI: {exc.reason}') from exc
 
 
 def _elevenlabs_request(path: str, api_key: str, payload: Optional[dict] = None, timeout: int = 15) -> bytes:
@@ -483,13 +514,20 @@ def get_available_tts() -> List[dict]:
         'offline': False, 'configured': bool(config), 'languages': list(EUROPEAN_LANGUAGE_CODES),
         'voices': get_elevenlabs_voices() if config else [], 'credits': get_elevenlabs_credits(),
     })
+    openai_config = get_openai_tts_config()
+    engines.append({
+        'id': 'openai', 'label': 'OpenAI TTS' if openai_config else 'OpenAI TTS · requiere API key',
+        'offline': False, 'configured': bool(openai_config), 'languages': list(EUROPEAN_LANGUAGE_CODES),
+        'voices': [{'id': voice, 'name': voice, 'languages': list(EUROPEAN_LANGUAGE_CODES)} for voice in OPENAI_TTS_VOICES],
+        'model': openai_config['model'] if openai_config else 'gpt-4o-mini-tts',
+    })
     return engines
 
 
 def is_paid_tts_quota_error(detail: Optional[str]) -> bool:
     """Indica si el proveedor pago agotó cuota y conviene pasar a un motor gratuito."""
     message = (detail or '').lower()
-    return any(marker in message for marker in ('quota_exceeded', 'quota exceeded', 'insufficient_credits', 'credit balance', 'credits remaining'))
+    return any(marker in message for marker in ('quota_exceeded', 'quota exceeded', 'insufficient_quota', 'insufficient_credits', 'credit balance', 'credits remaining', 'billing_hard_limit_reached'))
 
 
 class TTSEngine:
@@ -504,7 +542,7 @@ class TTSEngine:
         if tts_method and tts_method not in available_ids:
             raise ValueError(f"TTS no instalado o no soportado: {tts_method}")
         selected_methods = {'say': 'say', 'edge-tts': 'edge-tts', 'sapi': 'sapi',
-                            'gtts': 'linux', 'espeak-ng': 'espeak-ng', 'elevenlabs': 'elevenlabs'}
+                            'gtts': 'linux', 'espeak-ng': 'espeak-ng', 'elevenlabs': 'elevenlabs', 'openai': 'openai'}
         self.method = selected_methods.get(tts_method) if tts_method else self._detect_method()
         self.gtts_consecutive_failures = 0
         self.gtts_permanently_disabled = False
@@ -553,7 +591,7 @@ class TTSEngine:
         supported_languages = set(self.voice_config['espeak'])
         if self.method == 'say':
             supported_languages.update(voice['language'] for voice in get_say_voices())
-        elif self.method == 'elevenlabs':
+        elif self.method in {'elevenlabs', 'openai'}:
             supported_languages.update(EUROPEAN_LANGUAGE_CODES)
         if self.language not in supported_languages:
             print(f"{Colors.YELLOW}⚠️  Idioma '{self.language}' no soportado, usando 'es' por defecto{Colors.NC}")
@@ -583,6 +621,11 @@ class TTSEngine:
                 raise ValueError('ElevenLabs no devolvió voces. Revisá la API key y la conexión.')
             self.elevenlabs_voice = selected['id']
             print(f"{Colors.CYAN}  🎙️  Voz seleccionada: {selected['name']} (ElevenLabs){Colors.NC}")
+        elif self.method == 'openai':
+            if self.requested_voice and self.requested_voice not in OPENAI_TTS_VOICES:
+                raise ValueError(f"Voz de OpenAI no disponible: {self.requested_voice}")
+            self.openai_voice = self.requested_voice or 'alloy'
+            print(f"{Colors.CYAN}  🎙️  Voz seleccionada: {self.openai_voice} (OpenAI){Colors.NC}")
         elif self.requested_voice:
             raise ValueError(f"El TTS '{self.requested_tts or self.method}' no expone voces seleccionables")
         elif self.method in {"windows", "edge-tts"}:
@@ -606,6 +649,8 @@ class TTSEngine:
             return "espeak-ng"
         elif self.method == "elevenlabs":
             return "elevenlabs"
+        elif self.method == "openai":
+            return "openai"
         elif self.method == "windows":
             return "edge-tts"
         elif self.method == "linux":
@@ -801,6 +846,27 @@ class TTSEngine:
             )
             return False
 
+    def _generate_with_openai(self, text: str, rate: int, output_file: Path) -> bool:
+        """Genera WAV con OpenAI Audio API y conserva el error accionable."""
+        config = get_openai_tts_config()
+        if not config:
+            self.last_error = 'OpenAI TTS no está configurado. Agregá OPENAI_API_KEY o openai.api_key en .srt-essay-secrets.json.'
+            return False
+        if len(text) > 4096:
+            self.last_error = 'OpenAI TTS admite hasta 4096 caracteres por fragmento; reducí el tamaño del párrafo o fragmentalo.'
+            return False
+        try:
+            audio = _openai_tts_request({
+                'model': config['model'], 'voice': self.openai_voice, 'input': text,
+                'response_format': 'wav', 'speed': min(4.0, max(0.25, rate / 200)),
+            }, config['api_key'])
+            output_file.write_bytes(audio)
+            self.last_tts_used = 'openai'
+            return output_file.exists() and output_file.stat().st_size > 44
+        except (OSError, ValueError) as exc:
+            self.last_error = str(exc)
+            return False
+
     def generate_audio(self, text: str, rate: int, output_file: Path) -> bool:
         """Genera audio TTS con el rate especificado"""
         try:
@@ -815,6 +881,9 @@ class TTSEngine:
 
             if self.method == "elevenlabs":
                 return self._generate_with_elevenlabs(text, rate, output_file)
+
+            if self.method == "openai":
+                return self._generate_with_openai(text, rate, output_file)
 
             if self.method == "say":
                 # macOS say command con voz configurada según idioma
@@ -1931,15 +2000,16 @@ def generate_api_audio(payload: dict, directory: Path) -> Tuple[Path, dict]:
                 audio_file.unlink(missing_ok=True)
                 report_progress(f"TTS: generando fragmento {index + 1}/{len(lines)} a {rate} wpm.")
                 generated = engine.generate_audio(re.sub(r'<[^>]*>', '', line), rate, audio_file)
-                if not generated and requested_tts == 'elevenlabs' and is_paid_tts_quota_error(engine.last_error):
-                    fallback = get_free_tts_fallback(language, excluded='elevenlabs')
+                if not generated and requested_tts in {'elevenlabs', 'openai'} and is_paid_tts_quota_error(engine.last_error):
+                    provider = 'OpenAI' if requested_tts == 'openai' else 'ElevenLabs'
+                    fallback = get_free_tts_fallback(language, excluded=requested_tts)
                     if fallback:
                         fallback_reason = engine.last_error
                         engine = fallback
-                        report_progress(f"TTS: cuota de ElevenLabs agotada; continuando con {engine.get_tts_name()} gratuito/local.")
+                        report_progress(f"TTS: cuota de {provider} agotada; continuando con {engine.get_tts_name()} gratuito/local.")
                         generated = engine.generate_audio(re.sub(r'<[^>]*>', '', line), rate, audio_file)
                     else:
-                        raise RuntimeError('La cuota de ElevenLabs se agotó y no hay un TTS gratuito/local disponible para continuar.')
+                        raise RuntimeError(f'La cuota de {provider} se agotó y no hay un TTS gratuito/local disponible para continuar.')
                 if not generated:
                     detail = f': {engine.last_error}' if engine.last_error else ''
                     raise RuntimeError(f'No se pudo generar audio a {rate} wpm{detail}')

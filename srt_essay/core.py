@@ -290,6 +290,10 @@ def parse_plain_document(content: str) -> list[str]:
     # Frontmatter, enlaces y marcas de presentación no son parte de la prosa.
     content = re.sub(r"\A---\s*\n.*?\n---\s*(?:\n|\Z)", "", content, flags=re.DOTALL)
     content = re.sub(r"!?(?:\[([^\]]*)\])\([^)]*\)", r"\1", content)
+    # Los separadores horizontales son presentación Markdown, no texto narrable.
+    content = re.sub(r"^[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*$", "", content, flags=re.MULTILINE)
+    # Algunas transcripciones insertan la regla entre frases; tampoco debe llegar al TTS.
+    content = re.sub(r"(?<!\S)(?:-{3,}|\*{3,}|_{3,})(?!\S)", "", content)
     content = re.sub(r"^[ \t]*```[^\n]*$", "", content, flags=re.MULTILINE)
     # No usar `\s` aquí: también consume saltos de línea y fusiona párrafos.
     content = re.sub(r"^[ \t]*(?:#{1,6}[ \t]+|>[ \t]?|[-*+][ \t]+|\d+[.)][ \t]+)", "", content, flags=re.MULTILINE)
